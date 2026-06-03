@@ -1,0 +1,23 @@
+﻿from datetime import datetime
+from typing import Optional
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
+
+
+class ClassCreate(BaseModel):
+    branch_id: UUID
+    grade: str
+
+
+class ClassUpdate(BaseModel):
+    grade: Optional[str] = None
+
+
+class ClassResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    branch_id: UUID
+    grade: str
+    created_at: datetime
