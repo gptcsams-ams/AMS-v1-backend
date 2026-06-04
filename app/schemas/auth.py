@@ -6,6 +6,13 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=8)
 
 
+class RegisterRequest(BaseModel):
+    name: str = Field(min_length=1)
+    email: EmailStr
+    password: str = Field(min_length=8)
+    role: str = "ADMIN"
+
+
 class LoginResponse(BaseModel):
     access_token: str
     refresh_token: str

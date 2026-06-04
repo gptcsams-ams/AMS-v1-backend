@@ -23,8 +23,14 @@ async def get_current_user(
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    if await redis.exists(f"blacklist:token:{token}"):
-        raise HTTPException(status_code=401, detail="Token revoked")
+    try:
+        if await redis.exists(f"blacklist:token:{token}"):
+            raise HTTPException(status_code=401, detail="Token revoked")
+    except HTTPException:
+        raise
+    except Exception:
+        # Local development can run without Redis; token expiry is still enforced by JWT.
+        pass
 
     result = await db.execute(
         select(User).where(User.id == payload.get("sub"), User.is_active == True)

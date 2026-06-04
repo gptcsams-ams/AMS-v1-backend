@@ -97,6 +97,15 @@ async def create_section(
     _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
+    existing = (await db.execute(
+        select(Section).where(
+            Section.class_id == payload.class_id,
+            Section.name == payload.name,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Section '{payload.name}' already exists for this grade")
+
     row = Section(**payload.model_dump())
     db.add(row)
     await db.commit()
