@@ -1,15 +1,17 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import require_admin
+from app.models.branch import Branch
 from app.models.attendance import Attendance
 from app.models.leave_request import LeaveRequest
 from app.models.student import Student
 from app.models.student_face import StudentFace
+from app.models.student_enrollment import StudentEnrollment
 from app.schemas.common import MessageResponse
 from app.schemas.student import StudentCreate, StudentResponse, StudentUpdate
 from app.services.embedding_cache_service import invalidate_section_cache
@@ -19,8 +21,21 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[StudentResponse])
-async def list_students(_: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    rows = await db.execute(select(Student).order_by(Student.created_at.desc()))
+async def list_students(
+    section_id: UUID | None = Query(default=None),
+    year_id: UUID | None = Query(default=None),
+    _: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(Student)
+    if section_id or year_id:
+        stmt = stmt.join(StudentEnrollment, StudentEnrollment.student_id == Student.id)
+    if section_id:
+        stmt = stmt.where(StudentEnrollment.section_id == section_id)
+    if year_id:
+        stmt = stmt.where(StudentEnrollment.academic_year_id == year_id)
+
+    rows = await db.execute(stmt.where(Student.is_active == True).order_by(Student.created_at.desc()))
     return list(rows.scalars().all())
 
 
@@ -51,8 +66,33 @@ async def get_student_leaves(student_id: UUID, _: object = Depends(require_admin
 
 
 @router.post("", response_model=StudentResponse)
-async def create_student(payload: StudentCreate, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    row = Student(**payload.model_dump())
+async def create_student(
+    payload: StudentCreate,
+    current_user: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    existing = (await db.execute(
+        select(Student).where(Student.admission_number == payload.admission_number)
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Admission number '{payload.admission_number}' already exists. Use a unique admission number.",
+        )
+
+    data = payload.model_dump()
+    branch = (await db.execute(select(Branch).where(Branch.id == payload.branch_id))).scalar_one_or_none()
+    if not branch:
+        fallback_branch_id = getattr(current_user, "branch_id", None)
+        if fallback_branch_id:
+            branch = (await db.execute(select(Branch).where(Branch.id == fallback_branch_id))).scalar_one_or_none()
+        if not branch:
+            branch = (await db.execute(select(Branch).limit(1))).scalar_one_or_none()
+        if not branch:
+            raise HTTPException(status_code=400, detail="No branch is configured. Create a branch before adding students.")
+        data["branch_id"] = branch.id
+
+    row = Student(**data)
     db.add(row)
     await db.commit()
     await db.refresh(row)

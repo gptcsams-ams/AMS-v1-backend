@@ -21,3 +21,6 @@ class ClassResponse(BaseModel):
     branch_id: UUID
     grade: str
     created_at: datetime
+    section_count: Optional[int] = None
+    student_count: Optional[int] = None
+    avg_attendance_pct: Optional[float] = None

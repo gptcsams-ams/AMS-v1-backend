@@ -34,6 +34,31 @@ async def list_enrollments(
 
 @router.post("", response_model=EnrollmentResponse)
 async def create_enrollment(payload: EnrollmentCreate, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    existing_student_year = (await db.execute(
+        select(StudentEnrollment).where(
+            StudentEnrollment.student_id == payload.student_id,
+            StudentEnrollment.academic_year_id == payload.academic_year_id,
+        )
+    )).scalar_one_or_none()
+    if existing_student_year:
+        raise HTTPException(
+            status_code=409,
+            detail="This student is already enrolled for the selected academic year.",
+        )
+
+    existing_roll = (await db.execute(
+        select(StudentEnrollment).where(
+            StudentEnrollment.section_id == payload.section_id,
+            StudentEnrollment.academic_year_id == payload.academic_year_id,
+            StudentEnrollment.roll_number == payload.roll_number,
+        )
+    )).scalar_one_or_none()
+    if existing_roll:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Roll number '{payload.roll_number}' already exists in this section for the selected academic year.",
+        )
+
     row = StudentEnrollment(**payload.model_dump())
     db.add(row)
     await db.commit()

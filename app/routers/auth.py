@@ -15,7 +15,7 @@ from datetime import date
 from uuid import UUID
 import secrets
 
-router = APIRouter(prefix="/auth")
+router = APIRouter()
 
 
 @router.post("/register")

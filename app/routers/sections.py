@@ -47,13 +47,20 @@ async def get_section(
 @router.get("/{section_id}/students")
 async def get_section_students(
     section_id: UUID,
+    year_id: UUID | None = Query(default=None),
     _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = await db.execute(
+    stmt = (
         select(Student)
         .join(StudentEnrollment, StudentEnrollment.student_id == Student.id)
         .where(StudentEnrollment.section_id == section_id, Student.is_active == True)
+    )
+    if year_id:
+        stmt = stmt.where(StudentEnrollment.academic_year_id == year_id)
+
+    rows = await db.execute(
+        stmt.order_by(Student.roll_number.asc(), Student.first_name.asc())
     )
     return list(rows.scalars().all())
 
