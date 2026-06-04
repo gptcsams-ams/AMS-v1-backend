@@ -75,6 +75,15 @@ async def create_class(
     _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
+    existing = (await db.execute(
+        select(AcademicClass).where(
+            AcademicClass.branch_id == payload.branch_id,
+            AcademicClass.grade == payload.grade,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Grade '{payload.grade}' already exists for this branch")
+
     row = AcademicClass(**payload.model_dump())
     db.add(row)
     await db.commit()
