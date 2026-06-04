@@ -1,4 +1,4 @@
-﻿from uuid import UUID
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select, update
@@ -9,7 +9,7 @@ from app.core.dependencies import get_current_user, require_admin
 from app.models.leave_request import LeaveRequest
 from app.schemas.leave import LeaveCreate, LeaveReview
 
-router = APIRouter(prefix="/leaves")
+router = APIRouter()
 VALID_STATUSES = {"APPROVED", "REJECTED", "CANCELLED"}
 
 
@@ -17,6 +17,14 @@ VALID_STATUSES = {"APPROVED", "REJECTED", "CANCELLED"}
 async def list_leaves(_: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     rows = await db.execute(select(LeaveRequest).order_by(LeaveRequest.created_at.desc()))
     return list(rows.scalars().all())
+
+
+@router.get("/{leave_id}")
+async def get_leave(leave_id: UUID, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    row = (await db.execute(select(LeaveRequest).where(LeaveRequest.id == leave_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Leave request not found")
+    return row
 
 
 @router.post("")

@@ -1,14 +1,14 @@
-﻿from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import require_any, require_super_admin
+from app.core.dependencies import require_admin, require_any
 from app.models.branding import Branding
 from app.models.school import School
 from app.schemas.branding import BrandingResponse, BrandingUpdate
 
-router = APIRouter(prefix="/branding")
+router = APIRouter()
 
 
 @router.get("", response_model=BrandingResponse)
@@ -29,7 +29,7 @@ async def get_branding(db: AsyncSession = Depends(get_db)):
 @router.patch("", response_model=BrandingResponse)
 async def patch_branding(
     payload: BrandingUpdate,
-    _: object = Depends(require_super_admin),
+    _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     branding = (await db.execute(select(Branding).limit(1))).scalar_one_or_none()
@@ -50,7 +50,7 @@ async def patch_branding(
 @router.post("/logo", response_model=BrandingResponse)
 async def upload_logo(
     logo: UploadFile = File(...),
-    _: object = Depends(require_super_admin),
+    _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     branding = (await db.execute(select(Branding).limit(1))).scalar_one_or_none()

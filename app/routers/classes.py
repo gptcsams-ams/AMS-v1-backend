@@ -1,4 +1,4 @@
-﻿from datetime import date
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import require_admin, require_any, require_super_admin
+from app.core.dependencies import require_admin, require_any
 from app.models.academic_class import AcademicClass
 from app.models.attendance import Attendance
 from app.models.section import Section
@@ -14,7 +14,7 @@ from app.schemas.classes import ClassCreate, ClassResponse, ClassUpdate
 from app.schemas.common import MessageResponse
 from app.schemas.section import SectionResponse
 
-router = APIRouter(prefix="/classes")
+router = APIRouter()
 
 
 @router.get("", response_model=list[ClassResponse])
@@ -102,7 +102,7 @@ async def update_class(
 @router.delete("/{class_id}", response_model=MessageResponse)
 async def delete_class(
     class_id: UUID,
-    _: object = Depends(require_super_admin),
+    _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     row = (await db.execute(select(AcademicClass).where(AcademicClass.id == class_id))).scalar_one_or_none()

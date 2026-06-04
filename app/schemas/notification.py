@@ -11,3 +11,8 @@ class NotificationCreate(BaseModel):
     channel: str
     trigger_type: str
     message: str
+
+
+class NotificationUpdate(BaseModel):
+    message: Optional[str] = None
+    status: Optional[str] = None

@@ -1,17 +1,17 @@
-﻿from uuid import UUID
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import require_admin, require_any, require_super_admin
+from app.core.dependencies import require_admin, require_any
 from app.models.subject import Subject
 from app.models.teacher_subject_eligibility import TeacherSubjectEligibility
 from app.schemas.common import MessageResponse
 from app.schemas.subject import SubjectCreate, SubjectResponse, SubjectUpdate
 
-router = APIRouter(prefix="/subjects")
+router = APIRouter()
 
 
 @router.get("", response_model=list[SubjectResponse])
@@ -84,7 +84,7 @@ async def update_subject(
 @router.delete("/{subject_id}", response_model=MessageResponse)
 async def delete_subject(
     subject_id: UUID,
-    _: object = Depends(require_super_admin),
+    _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     row = (await db.execute(select(Subject).where(Subject.id == subject_id))).scalar_one_or_none()

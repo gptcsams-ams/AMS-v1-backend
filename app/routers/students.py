@@ -1,11 +1,11 @@
-﻿from uuid import UUID
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import require_admin, require_super_admin
+from app.core.dependencies import require_admin
 from app.models.attendance import Attendance
 from app.models.leave_request import LeaveRequest
 from app.models.student import Student
@@ -15,7 +15,7 @@ from app.schemas.student import StudentCreate, StudentResponse, StudentUpdate
 from app.services.embedding_cache_service import invalidate_section_cache
 from app.services.student_service import import_students_csv
 
-router = APIRouter(prefix="/students")
+router = APIRouter()
 
 
 @router.get("", response_model=list[StudentResponse])
@@ -100,7 +100,7 @@ async def delete_face(student_id: UUID, face_id: UUID, _: object = Depends(requi
 
 
 @router.delete("/{student_id}", response_model=MessageResponse)
-async def delete_student(student_id: UUID, _: object = Depends(require_super_admin), db: AsyncSession = Depends(get_db)):
+async def delete_student(student_id: UUID, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     row = (await db.execute(select(Student).where(Student.id == student_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Student not found")

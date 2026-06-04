@@ -1,4 +1,4 @@
-﻿from uuid import UUID
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -7,9 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.dependencies import require_admin
 from app.models.student_enrollment import StudentEnrollment
+from app.schemas.common import MessageResponse
 from app.schemas.enrollment import EnrollmentCreate, EnrollmentResponse, EnrollmentUpdate
 
-router = APIRouter(prefix="/enrollments")
+router = APIRouter()
 
 
 @router.get("", response_model=list[EnrollmentResponse])
@@ -40,6 +41,14 @@ async def create_enrollment(payload: EnrollmentCreate, _: object = Depends(requi
     return row
 
 
+@router.get("/{enrollment_id}", response_model=EnrollmentResponse)
+async def get_enrollment(enrollment_id: UUID, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    row = (await db.execute(select(StudentEnrollment).where(StudentEnrollment.id == enrollment_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+    return row
+
+
 @router.patch("/{enrollment_id}", response_model=EnrollmentResponse)
 async def update_enrollment(enrollment_id: UUID, payload: EnrollmentUpdate, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     row = (await db.execute(select(StudentEnrollment).where(StudentEnrollment.id == enrollment_id))).scalar_one_or_none()
@@ -50,3 +59,13 @@ async def update_enrollment(enrollment_id: UUID, payload: EnrollmentUpdate, _: o
     await db.commit()
     await db.refresh(row)
     return row
+
+
+@router.delete("/{enrollment_id}", response_model=MessageResponse)
+async def delete_enrollment(enrollment_id: UUID, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    row = (await db.execute(select(StudentEnrollment).where(StudentEnrollment.id == enrollment_id))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+    await db.delete(row)
+    await db.commit()
+    return MessageResponse(message="Enrollment deleted")

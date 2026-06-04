@@ -1,4 +1,4 @@
-﻿import json
+import json
 from datetime import datetime
 from uuid import UUID
 
@@ -13,7 +13,7 @@ from app.models.academic_record import AcademicRecord
 from app.schemas.report import ReportJobCreate
 from app.services.report_service import queue_report_card
 
-router = APIRouter(prefix="/reports")
+router = APIRouter()
 
 
 @router.get("/student/{student_id}")

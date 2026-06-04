@@ -1,4 +1,4 @@
-﻿from uuid import UUID
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -20,7 +20,7 @@ from app.schemas.timetable import (
 )
 from app.services.timetable_service import generate_draft, publish_timetable
 
-router = APIRouter(prefix="/timetable")
+router = APIRouter()
 
 
 @router.get("/sections/{section_id}")
