@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 
 class StudentCreate(BaseModel):
-    branch_id: UUID
+    branch_id: Optional[UUID] = None
     first_name: str
     last_name: str
     admission_number: str
@@ -54,5 +54,23 @@ class StudentResponse(BaseModel):
     group_name: Optional[str] = None
     join_date: Optional[date] = None
     student_photo_url: Optional[str] = None
+    face_image_url: Optional[str] = None
+    face_count: int = 0
+    is_active: bool
+    created_at: datetime
+
+
+class StudentFaceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    student_id: UUID
+    image_url: str
+    quality_score: Optional[float] = None
+    blur_score: Optional[float] = None
+    brightness_score: Optional[float] = None
+    face_bbox: Optional[dict] = None
+    source: Optional[str] = None
+    captured_date: Optional[date] = None
     is_active: bool
     created_at: datetime

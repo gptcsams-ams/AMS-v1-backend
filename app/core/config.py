@@ -25,6 +25,10 @@ class Settings(BaseSettings):
 
     STORAGE_BACKEND: str = "local"
 
+    IMAGEKIT_PUBLIC_KEY: Optional[str] = None
+    IMAGEKIT_PRIVATE_KEY: Optional[str] = None
+    IMAGEKIT_URL_ENDPOINT: Optional[str] = None
+
     MINIO_ENDPOINT: Optional[str] = None
     MINIO_ACCESS_KEY: Optional[str] = None
     MINIO_SECRET_KEY: Optional[str] = None

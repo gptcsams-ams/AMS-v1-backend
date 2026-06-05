@@ -7,6 +7,7 @@ from app.core.dependencies import require_admin, require_any
 from app.models.branding import Branding
 from app.models.school import School
 from app.schemas.branding import BrandingResponse, BrandingUpdate
+from app.services.imagekit_service import upload_imagekit_file
 
 router = APIRouter()
 
@@ -61,7 +62,7 @@ async def upload_logo(
         branding = Branding(school_id=school.id)
         db.add(branding)
 
-    branding.logo_url = f"/media/branding/{logo.filename}"
+    branding.logo_url = await upload_imagekit_file(logo, "/ams/branding")
     await db.commit()
     await db.refresh(branding)
     return branding
