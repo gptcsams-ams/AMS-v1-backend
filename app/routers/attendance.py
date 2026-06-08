@@ -1,7 +1,8 @@
-﻿from datetime import date
+from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import numpy as np
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,11 +11,23 @@ from app.core.dependencies import require_admin
 from app.core.redis import get_redis
 from app.models.attendance import Attendance
 from app.models.attendance_window import AttendanceWindow
+from app.models.student import Student
+from app.models.student_enrollment import StudentEnrollment
+from app.models.student_face import StudentFace
 from app.schemas.attendance import AttendanceManualMarkRequest
 from app.schemas.common import MessageResponse
 from app.schemas.timetable import AttendanceOverride, AttendanceWindowCreate, AttendanceWindowUpdate
+from app.services.face_embedding_service import analyze_face_upload
 
 router = APIRouter()
+
+
+def _cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
+    left_norm = float(np.linalg.norm(left))
+    right_norm = float(np.linalg.norm(right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    return float(np.dot(left, right) / (left_norm * right_norm))
 
 
 @router.get("/attendance-windows")
@@ -69,6 +82,72 @@ async def get_live_attendance(window_id: UUID, _: object = Depends(require_admin
     redis = get_redis()
     key = f"attendance:live:{window_id}:{date.today().isoformat()}"
     return await redis.hgetall(key)
+
+
+@router.post("/attendance/identify-face")
+async def identify_face(
+    section_id: UUID = Form(...),
+    academic_year_id: UUID = Form(...),
+    image: UploadFile = File(...),
+    threshold: float = Form(default=0.42),
+    _: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    analysis = await analyze_face_upload(image)
+    captured_embedding = np.asarray(analysis.embedding, dtype=np.float32)
+
+    rows = await db.execute(
+        select(Student, StudentFace)
+        .join(StudentEnrollment, StudentEnrollment.student_id == Student.id)
+        .join(StudentFace, StudentFace.student_id == Student.id)
+        .where(
+            StudentEnrollment.section_id == section_id,
+            StudentEnrollment.academic_year_id == academic_year_id,
+            Student.is_active == True,
+            StudentFace.is_active == True,
+        )
+    )
+
+    best_student: Student | None = None
+    best_face: StudentFace | None = None
+    best_score = 0.0
+
+    for student, face in rows.all():
+        if face.embedding is None:
+            continue
+        score = _cosine_similarity(captured_embedding, np.asarray(face.embedding, dtype=np.float32))
+        if score > best_score:
+            best_score = score
+            best_student = student
+            best_face = face
+
+    if not best_student or not best_face or best_score < threshold:
+        return {
+            "matched": False,
+            "confidence": round(best_score, 4),
+            "threshold": threshold,
+            "capture_quality": analysis.quality_score,
+            "face_bbox": analysis.face_bbox,
+            "message": "No enrolled student matched this camera image.",
+        }
+
+    return {
+        "matched": True,
+        "confidence": round(best_score, 4),
+        "threshold": threshold,
+        "capture_quality": analysis.quality_score,
+        "face_bbox": analysis.face_bbox,
+        "student": {
+            "id": str(best_student.id),
+            "first_name": best_student.first_name,
+            "last_name": best_student.last_name,
+            "admission_number": best_student.admission_number,
+            "roll_number": best_student.roll_number,
+            "student_photo_url": best_student.student_photo_url,
+            "face_image_url": best_face.image_url,
+            "face_quality": best_face.quality_score,
+        },
+    }
 
 
 @router.patch("/attendance/{attendance_id}/override")
