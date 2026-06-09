@@ -1,6 +1,7 @@
 from datetime import date
 from uuid import UUID
 
+import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import select
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import require_admin
+from app.core.insight_face import get_face_app
 from app.core.redis import get_redis
 from app.models.attendance import Attendance
 from app.models.attendance_window import AttendanceWindow
@@ -82,6 +84,35 @@ async def get_live_attendance(window_id: UUID, _: object = Depends(require_admin
     redis = get_redis()
     key = f"attendance:live:{window_id}:{date.today().isoformat()}"
     return await redis.hgetall(key)
+
+
+@router.post("/attendance/detect-faces")
+async def detect_faces(
+    image: UploadFile = File(...),
+    _: object = Depends(require_admin),
+):
+    """Lightweight InsightFace detection — returns bounding boxes for all detected faces, no DB query."""
+    content = await image.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty image")
+
+    buffer = np.frombuffer(content, dtype=np.uint8)
+    img = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="Invalid image")
+
+    faces = get_face_app().get(img)
+    result = []
+    for face in faces:
+        bbox = face.bbox.astype(int)
+        result.append({
+            "x": int(bbox[0]),
+            "y": int(bbox[1]),
+            "w": int(bbox[2] - bbox[0]),
+            "h": int(bbox[3] - bbox[1]),
+            "score": round(float(face.det_score), 3),
+        })
+    return {"faces": result, "count": len(result)}
 
 
 @router.post("/attendance/identify-face")
