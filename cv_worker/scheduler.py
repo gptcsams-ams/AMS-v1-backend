@@ -57,10 +57,11 @@ async def _fetch_active_windows(today: date, now: datetime):
         for window, camera in rows.all():
             if weekday not in (window.days_of_week or []):
                 continue
-            window_start = datetime.combine(today, window.start_time)
-            window_end = datetime.combine(today, window.end_time)
-            if now < window_start or now > window_end:
-                continue
+            # TODO: re-enable time window enforcement when ready
+            # window_start = datetime.combine(today, window.start_time)
+            # window_end = datetime.combine(today, window.end_time)
+            # if now < window_start or now > window_end:
+            #     continue
             results.append((window, camera, year_id))
 
     return results

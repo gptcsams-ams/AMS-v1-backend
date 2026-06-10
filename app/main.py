@@ -57,7 +57,7 @@ app.include_router(enrollments.router,    prefix=f"{PREFIX}/enrollments",     ta
 app.include_router(teachers.router,       prefix=f"{PREFIX}/teachers",        tags=["Teachers"])
 app.include_router(parents.router,        prefix=f"{PREFIX}/parents",         tags=["Parents"])
 app.include_router(timetable.router,      prefix=f"{PREFIX}/timetable",       tags=["Timetable"])
-app.include_router(attendance.router,     prefix=f"{PREFIX}/attendance",      tags=["Attendance"])
+app.include_router(attendance.router,     prefix=f"{PREFIX}",                 tags=["Attendance"])
 app.include_router(cameras.router,        prefix=f"{PREFIX}/cameras",         tags=["Cameras"])
 app.include_router(detections.router,     prefix=f"{PREFIX}/detections",      tags=["Detections"])
 app.include_router(leaves.router,         prefix=f"{PREFIX}/leaves",          tags=["Leaves"])
