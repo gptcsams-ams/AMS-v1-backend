@@ -25,8 +25,10 @@ class AttendanceWindow(Base):
     min_detections_required        = Column(Integer, nullable=False, default=3)
     min_presence_minutes           = Column(Integer, nullable=False, default=5)
     confidence_threshold           = Column(Float, nullable=False, default=0.65)
-    detection_start_offset_minutes = Column(Integer, nullable=False, default=3)
-    late_threshold_minutes         = Column(Integer, nullable=False, default=10)
+    detection_start_offset_minutes  = Column(Integer, nullable=False, default=3)
+    opening_capture_duration_minutes = Column(Integer, nullable=False, default=10)
+    closing_capture_duration_minutes = Column(Integer, nullable=False, default=5)
+    late_threshold_minutes           = Column(Integer, nullable=False, default=10)
     created_at                     = Column(TIMESTAMP, server_default=func.now())
 
     section            = relationship("Section", back_populates="attendance_windows")

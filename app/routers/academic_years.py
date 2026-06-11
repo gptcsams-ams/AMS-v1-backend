@@ -66,8 +66,20 @@ async def set_current_year(year_id: UUID, _: object = Depends(require_super_admi
     return year
 
 
+@router.delete("/{year_id}", response_model=MessageResponse)
+async def delete_year(year_id: UUID, _: object = Depends(require_super_admin), db: AsyncSession = Depends(get_db)):
+    year = (await db.execute(select(AcademicYear).where(AcademicYear.id == year_id))).scalar_one_or_none()
+    if not year:
+        raise HTTPException(status_code=404, detail="Academic year not found")
+    if year.is_current:
+        raise HTTPException(status_code=400, detail="Cannot delete the active academic year")
+    await db.delete(year)
+    await db.commit()
+    return MessageResponse(message="Academic year deleted")
+
+
 @router.post("/{year_id}/rollover", response_model=MessageResponse)
-async def rollover_year(year_id: UUID, _: object = Depends(require_super_admin), db: AsyncSession = Depends(get_db)):
+async def rollover_year(year_id: UUID, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     current = (await db.execute(select(AcademicYear).where(AcademicYear.id == year_id))).scalar_one_or_none()
     if not current:
         raise HTTPException(status_code=404, detail="Academic year not found")
