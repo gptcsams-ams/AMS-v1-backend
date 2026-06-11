@@ -262,14 +262,7 @@ async def _ensure_default_context(db: AsyncSession, current_user: User | None = 
     if current_user and not current_user.branch_id and current_user.role == "ADMIN":
         current_user.branch_id = branch.id
 
-    await db.commit()
-    await db.refresh(school)
-    await db.refresh(branch)
-    await db.refresh(year)
-    if current_user:
-        await db.refresh(current_user)
-
-    return {
+    context = {
         "school": {
             "id": str(school.id),
             "name": school.name,
@@ -292,6 +285,8 @@ async def _ensure_default_context(db: AsyncSession, current_user: User | None = 
             "branch_id": str(current_user.branch_id) if current_user and current_user.branch_id else str(branch.id),
         },
     }
+    await db.commit()
+    return context
 
 async def _issue_tokens(user: User, db: AsyncSession, redis) -> dict:
     access  = create_access_token({"sub": str(user.id), "role": user.role,
@@ -303,9 +298,7 @@ async def _issue_tokens(user: User, db: AsyncSession, redis) -> dict:
         except Exception:
             # Allow local development to continue even when Redis is not running.
             pass
-    user.last_login = func.now()
-    await db.commit()
-    return {
+    response = {
         "access_token": access,
         "refresh_token": refresh,
         "token_type": "bearer",
@@ -315,6 +308,9 @@ async def _issue_tokens(user: User, db: AsyncSession, redis) -> dict:
             "branch_id": str(user.branch_id) if user.branch_id else None,
         }
     }
+    user.last_login = func.now()
+    await db.commit()
+    return response
 
 
 def _get_optional_redis():

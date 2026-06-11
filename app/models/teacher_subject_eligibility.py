@@ -19,6 +19,7 @@ class TeacherSubjectEligibility(Base):
 
     teacher = relationship("TeacherProfile", back_populates="subject_eligibilities")
     subject = relationship("Subject", back_populates="eligibilities")
+    academic_class = relationship("AcademicClass")
 
     __table_args__ = (
         UniqueConstraint("teacher_profile_id", "subject_id", "class_id",

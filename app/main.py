@@ -10,7 +10,7 @@ from app.middleware.if_modified_since_middleware import IfModifiedSinceMiddlewar
 from app.middleware.rate_limit_middleware import RateLimitMiddleware
 from app.routers import (
     academic_years, attendance, audit, auth, branding, branches,
-    calendar, cameras, classes, detections, enrollments, leaves,
+    calendar, cameras, classes, classroom_attendance, detections, enrollments, leaves,
     mobile, notifications, parents, reports, school, sections,
     students, subjects, teachers, timetable, websocket,
 )
@@ -56,7 +56,8 @@ app.include_router(students.router,       prefix=f"{PREFIX}/students",        ta
 app.include_router(enrollments.router,    prefix=f"{PREFIX}/enrollments",     tags=["Enrollments"])
 app.include_router(teachers.router,       prefix=f"{PREFIX}/teachers",        tags=["Teachers"])
 app.include_router(parents.router,        prefix=f"{PREFIX}/parents",         tags=["Parents"])
-app.include_router(timetable.router,      prefix=f"{PREFIX}/timetable",       tags=["Timetable"])
+app.include_router(timetable.router,           prefix=f"{PREFIX}/timetable",            tags=["Timetable"])
+app.include_router(classroom_attendance.router, prefix=f"{PREFIX}/classroom-attendance", tags=["ClassroomAttendance"])
 app.include_router(attendance.router,     prefix=f"{PREFIX}",                 tags=["Attendance"])
 app.include_router(cameras.router,        prefix=f"{PREFIX}/cameras",         tags=["Cameras"])
 app.include_router(detections.router,     prefix=f"{PREFIX}/detections",      tags=["Detections"])

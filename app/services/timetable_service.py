@@ -9,6 +9,33 @@ from app.models.teacher_subject_eligibility import TeacherSubjectEligibility
 from app.models.timetable_entry import TimetableEntry
 
 
+async def check_teacher_conflict(
+    db: AsyncSession,
+    teacher_profile_id: UUID,
+    academic_year_id: UUID,
+    day_of_week: int,
+    start_time,
+    end_time,
+    exclude_entry_id: UUID | None = None,
+) -> TimetableEntry | None:
+    """Return an existing TimetableEntry that conflicts with the given teacher/time window, or None."""
+    stmt = (
+        select(TimetableEntry)
+        .join(PeriodSlot, PeriodSlot.id == TimetableEntry.period_slot_id)
+        .where(
+            TimetableEntry.teacher_profile_id == teacher_profile_id,
+            TimetableEntry.academic_year_id == academic_year_id,
+            PeriodSlot.day_of_week == day_of_week,
+            # overlapping: slot starts before this one ends AND slot ends after this one starts
+            PeriodSlot.start_time < end_time,
+            PeriodSlot.end_time > start_time,
+        )
+    )
+    if exclude_entry_id is not None:
+        stmt = stmt.where(TimetableEntry.id != exclude_entry_id)
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
 async def generate_draft(db: AsyncSession, section_id: UUID) -> dict:
     slots = (await db.execute(select(PeriodSlot).where(PeriodSlot.section_id == section_id))).scalars().all()
     created = 0

@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.core.dependencies import require_admin, require_any
 from app.models.subject import Subject
 from app.models.teacher_subject_eligibility import TeacherSubjectEligibility
+from app.models.user import User
 from app.schemas.common import MessageResponse
 from app.schemas.subject import SubjectCreate, SubjectResponse, SubjectUpdate
 
@@ -54,10 +55,25 @@ async def get_subject_teachers(
 @router.post("", response_model=SubjectResponse)
 async def create_subject(
     payload: SubjectCreate,
-    _: object = Depends(require_admin),
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    row = Subject(**payload.model_dump())
+    data = payload.model_dump()
+    branch_id = data.get("branch_id") or current_user.branch_id
+    if not branch_id:
+        raise HTTPException(status_code=400, detail="Select a branch before adding subjects")
+
+    existing = (await db.execute(
+        select(Subject).where(
+            Subject.branch_id == branch_id,
+            Subject.name == payload.name,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Subject '{payload.name}' already exists for this branch")
+
+    data["branch_id"] = branch_id
+    row = Subject(**data)
     db.add(row)
     await db.commit()
     await db.refresh(row)

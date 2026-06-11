@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict
 
 class StudentCreate(BaseModel):
     branch_id: Optional[UUID] = None
+    section_id: Optional[UUID] = None
+    academic_year_id: Optional[UUID] = None
     first_name: str
     last_name: str
     admission_number: str
@@ -19,6 +21,7 @@ class StudentCreate(BaseModel):
     address: Optional[str] = None
     group_name: Optional[str] = None
     join_date: Optional[date] = None
+    enrolled_at: Optional[date] = None
 
 
 class StudentUpdate(BaseModel):

@@ -2,6 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -113,6 +114,9 @@ async def create_student(
         )
 
     data = payload.model_dump()
+    section_id = data.pop("section_id", None)
+    academic_year_id = data.pop("academic_year_id", None)
+    enrolled_at = data.pop("enrolled_at", None)
     branch = (await db.execute(select(Branch).where(Branch.id == payload.branch_id))).scalar_one_or_none()
     if not branch:
         fallback_branch_id = getattr(current_user, "branch_id", None)
@@ -126,7 +130,40 @@ async def create_student(
 
     row = Student(**data)
     db.add(row)
-    await db.commit()
+
+    try:
+        await db.flush()
+
+        if section_id and academic_year_id:
+            existing_roll = (await db.execute(
+                select(StudentEnrollment).where(
+                    StudentEnrollment.section_id == section_id,
+                    StudentEnrollment.academic_year_id == academic_year_id,
+                    StudentEnrollment.roll_number == payload.roll_number,
+                )
+            )).scalar_one_or_none()
+            if existing_roll:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Roll number '{payload.roll_number}' already exists in this section for the selected academic year.",
+                )
+
+            db.add(StudentEnrollment(
+                student_id=row.id,
+                section_id=section_id,
+                academic_year_id=academic_year_id,
+                roll_number=payload.roll_number,
+                enrolled_at=enrolled_at or payload.join_date,
+            ))
+
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Could not add student. Please check the selected class, section, and academic year.")
+
     await db.refresh(row)
     return row
 

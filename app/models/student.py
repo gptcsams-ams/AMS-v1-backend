@@ -33,8 +33,11 @@ class Student(Base):
     attendance_records = relationship("Attendance", back_populates="student",
                                       cascade="all, delete-orphan")
     detections         = relationship("Detection", back_populates="student")
-    student_parents    = relationship("StudentParent", back_populates="student",
-                                      cascade="all, delete-orphan")
+    student_parents              = relationship("StudentParent", back_populates="student",
+                                               cascade="all, delete-orphan")
+    classroom_attendance_records = relationship("ClassroomAttendanceRecord",
+                                                back_populates="student",
+                                                cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("admission_number", name="uq_student_admission"),
