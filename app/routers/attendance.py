@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from uuid import UUID
 
 import cv2
@@ -8,15 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import require_admin
+from app.core.dependencies import require_admin, require_any
 from app.core.insight_face import get_face_app
 from app.core.redis import get_redis
+from app.models.academic_year import AcademicYear
 from app.models.attendance import Attendance
 from app.models.attendance_window import AttendanceWindow
 from app.models.student import Student
 from app.models.student_enrollment import StudentEnrollment
 from app.models.student_face import StudentFace
-from app.schemas.attendance import AttendanceBulkMarkRequest, AttendanceManualMarkRequest
+from app.schemas.attendance import AttendanceBulkMarkRequest, AttendanceManualMarkRequest, ClassroomManualMarkRequest
 from app.schemas.common import MessageResponse
 from app.schemas.timetable import AttendanceOverride, AttendanceWindowCreate, AttendanceWindowUpdate
 from app.services.face_embedding_service import analyze_face_upload
@@ -72,12 +73,31 @@ async def delete_window(window_id: UUID, _: object = Depends(require_admin), db:
 
 
 @router.get("/attendance")
-async def list_attendance(section_id: UUID | None = Query(default=None), _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    stmt = select(Attendance)
+async def list_attendance(
+    section_id: UUID | None = Query(default=None),
+    academic_year_id: UUID | None = Query(default=None),
+    attendance_date: date | None = Query(default=None),
+    _: object = Depends(require_any),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(
+        Attendance.id,
+        Attendance.student_id,
+        Attendance.section_id,
+        Attendance.academic_year_id,
+        Attendance.attendance_date,
+        Attendance.status,
+        Attendance.marked_by,
+        Attendance.is_overridden,
+    )
     if section_id:
         stmt = stmt.where(Attendance.section_id == section_id)
+    if academic_year_id:
+        stmt = stmt.where(Attendance.academic_year_id == academic_year_id)
+    if attendance_date:
+        stmt = stmt.where(Attendance.attendance_date == attendance_date)
     rows = await db.execute(stmt)
-    return list(rows.scalars().all())
+    return [row._asdict() for row in rows.all()]
 
 
 @router.get("/attendance/live/{window_id}")
@@ -335,6 +355,80 @@ async def mark_bulk(payload: AttendanceBulkMarkRequest, _: object = Depends(requ
             status=payload.status,
         )
     return {"total": len(payload.student_ids), "status": payload.status}
+
+
+@router.post("/attendance/mark-classroom")
+async def mark_classroom(payload: ClassroomManualMarkRequest, _: object = Depends(require_any), db: AsyncSession = Depends(get_db)):
+    # Resolve academic year: use provided id or fall back to the current active year
+    academic_year_id = payload.academic_year_id
+    if academic_year_id is None:
+        today = date.today()
+        # Try to find the year that covers today
+        current_year = (await db.execute(
+            select(AcademicYear)
+            .where(
+                AcademicYear.is_current == True,
+                AcademicYear.start_date <= today,
+                AcademicYear.end_date >= today,
+            )
+            .limit(1)
+        )).scalar_one_or_none()
+
+        if current_year is None:
+            # Fall back: any year marked is_current
+            current_year = (await db.execute(
+                select(AcademicYear).where(AcademicYear.is_current == True).limit(1)
+            )).scalar_one_or_none()
+
+        if current_year is None:
+            # Last resort: most recently started year
+            current_year = (await db.execute(
+                select(AcademicYear).order_by(AcademicYear.start_date.desc()).limit(1)
+            )).scalar_one_or_none()
+
+        if current_year is None:
+            raise HTTPException(status_code=400, detail="No academic year found. Please create an academic year first.")
+
+        academic_year_id = current_year.id
+
+    manual_window = (
+        await db.execute(
+            select(AttendanceWindow).where(
+                AttendanceWindow.section_id == payload.section_id,
+                AttendanceWindow.name == "Manual Attendance",
+            )
+        )
+    ).scalar_one_or_none()
+
+    if not manual_window:
+        manual_window = AttendanceWindow(
+            section_id=payload.section_id,
+            name="Manual Attendance",
+            start_time=time(0, 0),
+            end_time=time(23, 59),
+            days_of_week=[0, 1, 2, 3, 4, 5, 6],
+            is_manual_trigger=True,
+            is_active=True,
+        )
+        db.add(manual_window)
+        await db.flush()
+
+    await upsert_attendance(
+        db,
+        student_id=payload.student_id,
+        section_id=payload.section_id,
+        academic_year_id=academic_year_id,
+        attendance_window_id=manual_window.id,
+        attendance_date=payload.attendance_date.date(),
+        detected_at=payload.attendance_date,
+        status=payload.status,
+        force=True,
+    )
+    return {
+        "student_id": str(payload.student_id),
+        "status": payload.status,
+        "attendance_window_id": str(manual_window.id),
+    }
 
 
 @router.get("/attendance/report/student/{student_id}")

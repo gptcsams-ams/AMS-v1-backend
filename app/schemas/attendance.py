@@ -25,3 +25,11 @@ class AttendanceBulkMarkRequest(BaseModel):
     attendance_window_id: UUID
     attendance_date: datetime
     status: str = "PRESENT"
+
+
+class ClassroomManualMarkRequest(BaseModel):
+    student_id: UUID
+    section_id: UUID
+    academic_year_id: Optional[UUID] = None
+    attendance_date: datetime
+    status: str
