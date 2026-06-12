@@ -54,3 +54,6 @@ require_super_admin = require_roles("SUPER_ADMIN")
 require_admin = require_roles("SUPER_ADMIN", "ADMIN")
 require_teacher = require_roles("SUPER_ADMIN", "ADMIN", "TEACHER")
 require_any = get_current_user
+
+
+require_parent = require_roles("PARENT")
