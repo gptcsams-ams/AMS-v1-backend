@@ -1,17 +1,17 @@
-﻿from uuid import UUID
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import require_admin, require_super_admin
+from app.core.dependencies import require_admin
 from app.models.camera import Camera
 from app.models.camera_health_log import CameraHealthLog
 from app.schemas.camera import CameraCreate, CameraUpdate
 from app.schemas.common import MessageResponse
 
-router = APIRouter(prefix="/cameras")
+router = APIRouter()
 
 
 @router.get("")
@@ -48,7 +48,7 @@ async def update_camera(camera_id: UUID, payload: CameraUpdate, _: object = Depe
 
 
 @router.delete("/{camera_id}", response_model=MessageResponse)
-async def delete_camera(camera_id: UUID, _: object = Depends(require_super_admin), db: AsyncSession = Depends(get_db)):
+async def delete_camera(camera_id: UUID, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     row = (await db.execute(select(Camera).where(Camera.id == camera_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Camera not found")

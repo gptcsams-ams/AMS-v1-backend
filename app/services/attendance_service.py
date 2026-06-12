@@ -19,7 +19,12 @@ async def upsert_attendance(
     attendance_date: date,
     detected_at: datetime,
     status: str = "PRESENT",
+    force: bool = False,
 ) -> None:
+    # DB column is TIMESTAMP WITHOUT TIME ZONE — strip tzinfo if present
+    if detected_at.tzinfo is not None:
+        detected_at = detected_at.replace(tzinfo=None)
+
     stmt = insert(Attendance).values(
         student_id=student_id,
         section_id=section_id,
@@ -31,18 +36,28 @@ async def upsert_attendance(
         first_detected_at=detected_at,
         last_detected_at=detected_at,
         marked_by="SYSTEM",
-        is_overridden=False,
+        is_overridden=force,
     )
-    stmt = stmt.on_conflict_do_update(
-        constraint="uq_student_window_date",
-        set_={
-            "detection_count": func.greatest(Attendance.detection_count + 1, 1),
-            "last_detected_at": detected_at,
-            "first_detected_at": func.coalesce(Attendance.first_detected_at, detected_at),
-            "status": status,
-        },
-        where=(Attendance.is_overridden == False),
-    )
+    update_set: dict = {
+        "last_detected_at": detected_at,
+        "first_detected_at": func.coalesce(Attendance.first_detected_at, detected_at),
+        "status": status,
+    }
+    if force:
+        # Manual override: always update regardless of is_overridden flag
+        update_set["is_overridden"] = True
+        update_set["marked_by"] = "MANUAL"
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_student_window_date",
+            set_=update_set,
+        )
+    else:
+        update_set["detection_count"] = func.greatest(Attendance.detection_count + 1, 1)
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_student_window_date",
+            set_=update_set,
+            where=(Attendance.is_overridden == False),
+        )
     await db.execute(stmt)
     await db.commit()
 

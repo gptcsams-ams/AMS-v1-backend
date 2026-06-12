@@ -1,4 +1,4 @@
-﻿from datetime import date
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.core.dependencies import require_admin
 from app.models.detection import Detection
 
-router = APIRouter(prefix="/detections")
+router = APIRouter()
 
 
 @router.get("")

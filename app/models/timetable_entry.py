@@ -23,9 +23,12 @@ class TimetableEntry(Base):
     published_at       = Column(TIMESTAMP)
     created_at         = Column(TIMESTAMP, server_default=func.now())
 
-    period_slot = relationship("PeriodSlot", back_populates="timetable_entry")
-    subject     = relationship("Subject", back_populates="timetable_entries")
-    teacher     = relationship("TeacherProfile", back_populates="timetable_entries")
+    period_slot                  = relationship("PeriodSlot", back_populates="timetable_entry")
+    subject                      = relationship("Subject", back_populates="timetable_entries")
+    teacher                      = relationship("TeacherProfile", back_populates="timetable_entries")
+    classroom_attendance_records = relationship("ClassroomAttendanceRecord",
+                                                back_populates="timetable_entry",
+                                                cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("period_slot_id", "academic_year_id", name="uq_timetable_entry"),

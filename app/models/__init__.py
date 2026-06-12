@@ -1,4 +1,5 @@
-﻿from app.models.academic_class import AcademicClass
+﻿from app.models.classroom_attendance_record import ClassroomAttendanceRecord
+from app.models.academic_class import AcademicClass
 from app.models.academic_record import AcademicRecord
 from app.models.academic_year import AcademicYear
 from app.models.attendance import Attendance
@@ -30,6 +31,7 @@ from app.models.timetable_frequency_target import TimetableFrequencyTarget
 from app.models.user import User
 
 __all__ = [
+    "ClassroomAttendanceRecord",
     "AcademicClass",
     "AcademicRecord",
     "AcademicYear",

@@ -1,20 +1,37 @@
-﻿from datetime import date
+from datetime import date, datetime, time
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import cv2
+import numpy as np
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import require_admin
+from app.core.dependencies import require_admin, require_any
+from app.core.insight_face import get_face_app
 from app.core.redis import get_redis
+from app.models.academic_year import AcademicYear
 from app.models.attendance import Attendance
 from app.models.attendance_window import AttendanceWindow
-from app.schemas.attendance import AttendanceManualMarkRequest
+from app.models.student import Student
+from app.models.student_enrollment import StudentEnrollment
+from app.models.student_face import StudentFace
+from app.schemas.attendance import AttendanceBulkMarkRequest, AttendanceManualMarkRequest, ClassroomManualMarkRequest
 from app.schemas.common import MessageResponse
 from app.schemas.timetable import AttendanceOverride, AttendanceWindowCreate, AttendanceWindowUpdate
+from app.services.face_embedding_service import analyze_face_upload
+from app.services.attendance_service import upsert_attendance
 
 router = APIRouter()
+
+
+def _cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
+    left_norm = float(np.linalg.norm(left))
+    right_norm = float(np.linalg.norm(right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    return float(np.dot(left, right) / (left_norm * right_norm))
 
 
 @router.get("/attendance-windows")
@@ -56,12 +73,31 @@ async def delete_window(window_id: UUID, _: object = Depends(require_admin), db:
 
 
 @router.get("/attendance")
-async def list_attendance(section_id: UUID | None = Query(default=None), _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    stmt = select(Attendance)
+async def list_attendance(
+    section_id: UUID | None = Query(default=None),
+    academic_year_id: UUID | None = Query(default=None),
+    attendance_date: date | None = Query(default=None),
+    _: object = Depends(require_any),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(
+        Attendance.id,
+        Attendance.student_id,
+        Attendance.section_id,
+        Attendance.academic_year_id,
+        Attendance.attendance_date,
+        Attendance.status,
+        Attendance.marked_by,
+        Attendance.is_overridden,
+    )
     if section_id:
         stmt = stmt.where(Attendance.section_id == section_id)
+    if academic_year_id:
+        stmt = stmt.where(Attendance.academic_year_id == academic_year_id)
+    if attendance_date:
+        stmt = stmt.where(Attendance.attendance_date == attendance_date)
     rows = await db.execute(stmt)
-    return list(rows.scalars().all())
+    return [row._asdict() for row in rows.all()]
 
 
 @router.get("/attendance/live/{window_id}")
@@ -69,6 +105,209 @@ async def get_live_attendance(window_id: UUID, _: object = Depends(require_admin
     redis = get_redis()
     key = f"attendance:live:{window_id}:{date.today().isoformat()}"
     return await redis.hgetall(key)
+
+
+@router.post("/attendance/detect-faces")
+async def detect_faces(
+    image: UploadFile = File(...),
+    _: object = Depends(require_admin),
+):
+    """Lightweight InsightFace detection — returns bounding boxes for all detected faces, no DB query."""
+    content = await image.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty image")
+
+    buffer = np.frombuffer(content, dtype=np.uint8)
+    img = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="Invalid image")
+
+    faces = get_face_app().get(img)
+    result = []
+    for face in faces:
+        bbox = face.bbox.astype(int)
+        result.append({
+            "x": int(bbox[0]),
+            "y": int(bbox[1]),
+            "w": int(bbox[2] - bbox[0]),
+            "h": int(bbox[3] - bbox[1]),
+            "score": round(float(face.det_score), 3),
+        })
+    return {"faces": result, "count": len(result)}
+
+
+@router.post("/attendance/identify-face")
+async def identify_face(
+    section_id: UUID = Form(...),
+    academic_year_id: UUID = Form(...),
+    image: UploadFile = File(...),
+    threshold: float = Form(default=0.42),
+    _: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    analysis = await analyze_face_upload(image)
+    captured_embedding = np.asarray(analysis.embedding, dtype=np.float32)
+
+    rows = await db.execute(
+        select(Student, StudentFace)
+        .join(StudentEnrollment, StudentEnrollment.student_id == Student.id)
+        .join(StudentFace, StudentFace.student_id == Student.id)
+        .where(
+            StudentEnrollment.section_id == section_id,
+            StudentEnrollment.academic_year_id == academic_year_id,
+            Student.is_active == True,
+            StudentFace.is_active == True,
+        )
+    )
+
+    best_student: Student | None = None
+    best_face: StudentFace | None = None
+    best_score = 0.0
+
+    for student, face in rows.all():
+        if face.embedding is None:
+            continue
+        score = _cosine_similarity(captured_embedding, np.asarray(face.embedding, dtype=np.float32))
+        if score > best_score:
+            best_score = score
+            best_student = student
+            best_face = face
+
+    if not best_student or not best_face or best_score < threshold:
+        return {
+            "matched": False,
+            "confidence": round(best_score, 4),
+            "threshold": threshold,
+            "capture_quality": analysis.quality_score,
+            "face_bbox": analysis.face_bbox,
+            "message": "No enrolled student matched this camera image.",
+        }
+
+    return {
+        "matched": True,
+        "confidence": round(best_score, 4),
+        "threshold": threshold,
+        "capture_quality": analysis.quality_score,
+        "face_bbox": analysis.face_bbox,
+        "student": {
+            "id": str(best_student.id),
+            "first_name": best_student.first_name,
+            "last_name": best_student.last_name,
+            "admission_number": best_student.admission_number,
+            "roll_number": best_student.roll_number,
+            "student_photo_url": best_student.student_photo_url,
+            "face_image_url": best_face.image_url,
+            "face_quality": best_face.quality_score,
+        },
+    }
+
+
+@router.post("/attendance/scan-frame")
+async def scan_frame(
+    section_id: UUID = Form(...),
+    academic_year_id: UUID = Form(...),
+    image: UploadFile = File(...),
+    threshold: float = Form(default=0.42),
+    attendance_window_id: UUID | None = Form(default=None),
+    _: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    content = await image.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty image")
+
+    buffer = np.frombuffer(content, dtype=np.uint8)
+    img = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="Invalid image")
+
+    detected_faces = get_face_app().get(img)
+    enrolled_rows = await db.execute(
+        select(Student, StudentFace)
+        .join(StudentEnrollment, StudentEnrollment.student_id == Student.id)
+        .join(StudentFace, StudentFace.student_id == Student.id)
+        .where(
+            StudentEnrollment.section_id == section_id,
+            StudentEnrollment.academic_year_id == academic_year_id,
+            Student.is_active == True,
+            StudentFace.is_active == True,
+        )
+    )
+    enrolled = list(enrolled_rows.all())
+
+    matches = []
+    marked_ids: set[UUID] = set()
+    now = datetime.utcnow()
+    today = date.today()
+
+    for detected in detected_faces:
+        detected_embedding = np.asarray(detected.embedding, dtype=np.float32)
+        detected_norm = np.linalg.norm(detected_embedding)
+        if detected_norm > 0:
+            detected_embedding = detected_embedding / detected_norm
+
+        bbox_arr = detected.bbox.astype(int)
+        face_bbox = {
+            "x": int(bbox_arr[0]),
+            "y": int(bbox_arr[1]),
+            "w": int(bbox_arr[2] - bbox_arr[0]),
+            "h": int(bbox_arr[3] - bbox_arr[1]),
+        }
+
+        best_student: Student | None = None
+        best_face: StudentFace | None = None
+        best_score = 0.0
+
+        for student, face in enrolled:
+            if face.embedding is None:
+                continue
+            score = _cosine_similarity(detected_embedding, np.asarray(face.embedding, dtype=np.float32))
+            if score > best_score:
+                best_score = score
+                best_student = student
+                best_face = face
+
+        matched = bool(best_student and best_face and best_score >= threshold)
+        item = {
+            "matched": matched,
+            "confidence": round(best_score, 4),
+            "threshold": threshold,
+            "face_bbox": face_bbox,
+            "detection_score": round(float(detected.det_score), 4),
+        }
+        if matched and best_student and best_face:
+            item["student"] = {
+                "id": str(best_student.id),
+                "first_name": best_student.first_name,
+                "last_name": best_student.last_name,
+                "admission_number": best_student.admission_number,
+                "roll_number": best_student.roll_number,
+                "student_photo_url": best_student.student_photo_url,
+                "face_image_url": best_face.image_url,
+                "face_quality": best_face.quality_score,
+            }
+            if attendance_window_id and best_student.id not in marked_ids:
+                await upsert_attendance(
+                    db,
+                    student_id=best_student.id,
+                    section_id=section_id,
+                    academic_year_id=academic_year_id,
+                    attendance_window_id=attendance_window_id,
+                    attendance_date=today,
+                    detected_at=now,
+                    status="PRESENT",
+                )
+                marked_ids.add(best_student.id)
+
+        matches.append(item)
+
+    return {
+        "faces_detected": len(detected_faces),
+        "matched_count": len([item for item in matches if item["matched"]]),
+        "attendance_marked_count": len(marked_ids),
+        "threshold": threshold,
+        "matches": matches,
+    }
 
 
 @router.patch("/attendance/{attendance_id}/override")
@@ -99,6 +338,97 @@ async def mark_manual(payload: AttendanceManualMarkRequest, _: object = Depends(
     db.add(row)
     await db.commit()
     return {"id": str(row.id)}
+
+
+@router.post("/attendance/mark-bulk")
+async def mark_bulk(payload: AttendanceBulkMarkRequest, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    detected_at = payload.attendance_date
+    for student_id in payload.student_ids:
+        await upsert_attendance(
+            db,
+            student_id=student_id,
+            section_id=payload.section_id,
+            academic_year_id=payload.academic_year_id,
+            attendance_window_id=payload.attendance_window_id,
+            attendance_date=payload.attendance_date.date(),
+            detected_at=detected_at,
+            status=payload.status,
+        )
+    return {"total": len(payload.student_ids), "status": payload.status}
+
+
+@router.post("/attendance/mark-classroom")
+async def mark_classroom(payload: ClassroomManualMarkRequest, _: object = Depends(require_any), db: AsyncSession = Depends(get_db)):
+    # Resolve academic year: use provided id or fall back to the current active year
+    academic_year_id = payload.academic_year_id
+    if academic_year_id is None:
+        today = date.today()
+        # Try to find the year that covers today
+        current_year = (await db.execute(
+            select(AcademicYear)
+            .where(
+                AcademicYear.is_current == True,
+                AcademicYear.start_date <= today,
+                AcademicYear.end_date >= today,
+            )
+            .limit(1)
+        )).scalar_one_or_none()
+
+        if current_year is None:
+            # Fall back: any year marked is_current
+            current_year = (await db.execute(
+                select(AcademicYear).where(AcademicYear.is_current == True).limit(1)
+            )).scalar_one_or_none()
+
+        if current_year is None:
+            # Last resort: most recently started year
+            current_year = (await db.execute(
+                select(AcademicYear).order_by(AcademicYear.start_date.desc()).limit(1)
+            )).scalar_one_or_none()
+
+        if current_year is None:
+            raise HTTPException(status_code=400, detail="No academic year found. Please create an academic year first.")
+
+        academic_year_id = current_year.id
+
+    manual_window = (
+        await db.execute(
+            select(AttendanceWindow).where(
+                AttendanceWindow.section_id == payload.section_id,
+                AttendanceWindow.name == "Manual Attendance",
+            )
+        )
+    ).scalar_one_or_none()
+
+    if not manual_window:
+        manual_window = AttendanceWindow(
+            section_id=payload.section_id,
+            name="Manual Attendance",
+            start_time=time(0, 0),
+            end_time=time(23, 59),
+            days_of_week=[0, 1, 2, 3, 4, 5, 6],
+            is_manual_trigger=True,
+            is_active=True,
+        )
+        db.add(manual_window)
+        await db.flush()
+
+    await upsert_attendance(
+        db,
+        student_id=payload.student_id,
+        section_id=payload.section_id,
+        academic_year_id=academic_year_id,
+        attendance_window_id=manual_window.id,
+        attendance_date=payload.attendance_date.date(),
+        detected_at=payload.attendance_date,
+        status=payload.status,
+        force=True,
+    )
+    return {
+        "student_id": str(payload.student_id),
+        "status": payload.status,
+        "attendance_window_id": str(manual_window.id),
+    }
 
 
 @router.get("/attendance/report/student/{student_id}")

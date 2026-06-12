@@ -1,16 +1,28 @@
-﻿from uuid import UUID
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import require_admin, require_super_admin
+from app.core.dependencies import require_admin
 from app.models.branch import Branch
 from app.schemas.branch import BranchCreate, BranchResponse, BranchUpdate
 from app.schemas.common import MessageResponse
 
-router = APIRouter(prefix="/branches")
+router = APIRouter()
+
+
+@router.get("/{branch_id}", response_model=BranchResponse)
+async def get_branch(
+    branch_id: UUID,
+    _: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    branch = (await db.execute(select(Branch).where(Branch.id == branch_id))).scalar_one_or_none()
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    return branch
 
 
 @router.get("", response_model=list[BranchResponse])
@@ -25,7 +37,7 @@ async def list_branches(
 @router.post("", response_model=BranchResponse)
 async def create_branch(
     payload: BranchCreate,
-    _: object = Depends(require_super_admin),
+    _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     branch = Branch(**payload.model_dump())
@@ -39,7 +51,7 @@ async def create_branch(
 async def update_branch(
     branch_id: UUID,
     payload: BranchUpdate,
-    _: object = Depends(require_super_admin),
+    _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     branch = (await db.execute(select(Branch).where(Branch.id == branch_id))).scalar_one_or_none()
@@ -57,7 +69,7 @@ async def update_branch(
 @router.delete("/{branch_id}", response_model=MessageResponse)
 async def delete_branch(
     branch_id: UUID,
-    _: object = Depends(require_super_admin),
+    _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     branch = (await db.execute(select(Branch).where(Branch.id == branch_id))).scalar_one_or_none()

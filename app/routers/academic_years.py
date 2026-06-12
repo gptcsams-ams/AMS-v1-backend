@@ -1,17 +1,17 @@
-﻿from uuid import UUID
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import require_any, require_admin, require_super_admin
+from app.core.dependencies import require_any, require_admin
 from app.models.academic_year import AcademicYear
 from app.models.student_enrollment import StudentEnrollment
 from app.schemas.academic_year import AcademicYearCreate, AcademicYearResponse, AcademicYearUpdate
 from app.schemas.common import MessageResponse
 
-router = APIRouter(prefix="/academic-years")
+router = APIRouter()
 
 
 @router.get("", response_model=list[AcademicYearResponse])
@@ -29,7 +29,7 @@ async def get_current_year(_: object = Depends(require_any), db: AsyncSession = 
 
 
 @router.post("", response_model=AcademicYearResponse)
-async def create_year(payload: AcademicYearCreate, _: object = Depends(require_super_admin), db: AsyncSession = Depends(get_db)):
+async def create_year(payload: AcademicYearCreate, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     if payload.is_current:
         await db.execute(update(AcademicYear).where(AcademicYear.school_id == payload.school_id, AcademicYear.is_current == True).values(is_current=False))
     year = AcademicYear(**payload.model_dump())
@@ -40,7 +40,7 @@ async def create_year(payload: AcademicYearCreate, _: object = Depends(require_s
 
 
 @router.patch("/{year_id}", response_model=AcademicYearResponse)
-async def update_year(year_id: UUID, payload: AcademicYearUpdate, _: object = Depends(require_super_admin), db: AsyncSession = Depends(get_db)):
+async def update_year(year_id: UUID, payload: AcademicYearUpdate, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     year = (await db.execute(select(AcademicYear).where(AcademicYear.id == year_id))).scalar_one_or_none()
     if not year:
         raise HTTPException(status_code=404, detail="Academic year not found")
@@ -55,7 +55,7 @@ async def update_year(year_id: UUID, payload: AcademicYearUpdate, _: object = De
 
 
 @router.post("/{year_id}/set-current", response_model=AcademicYearResponse)
-async def set_current_year(year_id: UUID, _: object = Depends(require_super_admin), db: AsyncSession = Depends(get_db)):
+async def set_current_year(year_id: UUID, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     year = (await db.execute(select(AcademicYear).where(AcademicYear.id == year_id))).scalar_one_or_none()
     if not year:
         raise HTTPException(status_code=404, detail="Academic year not found")
@@ -67,7 +67,7 @@ async def set_current_year(year_id: UUID, _: object = Depends(require_super_admi
 
 
 @router.delete("/{year_id}", response_model=MessageResponse)
-async def delete_year(year_id: UUID, _: object = Depends(require_super_admin), db: AsyncSession = Depends(get_db)):
+async def delete_year(year_id: UUID, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     year = (await db.execute(select(AcademicYear).where(AcademicYear.id == year_id))).scalar_one_or_none()
     if not year:
         raise HTTPException(status_code=404, detail="Academic year not found")

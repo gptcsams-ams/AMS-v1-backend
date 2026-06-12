@@ -7,7 +7,7 @@ from app.core.dependencies import get_current_user
 from app.core.redis import get_redis
 from app.schemas.mobile import MobileRegisterDeviceRequest, MobileRegisterDeviceResponse
 
-router = APIRouter(prefix="/mobile")
+router = APIRouter()
 
 
 @router.post("/register-device", response_model=MobileRegisterDeviceResponse)

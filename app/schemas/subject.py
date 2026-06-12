@@ -6,16 +6,14 @@ from pydantic import BaseModel, ConfigDict
 
 
 class SubjectCreate(BaseModel):
-    branch_id: UUID
+    branch_id: Optional[UUID] = None
     name: str
     code: Optional[str] = None
-    color: Optional[str] = "#6366F1"
 
 
 class SubjectUpdate(BaseModel):
     name: Optional[str] = None
     code: Optional[str] = None
-    color: Optional[str] = None
 
 
 class SubjectResponse(BaseModel):
@@ -25,5 +23,4 @@ class SubjectResponse(BaseModel):
     branch_id: UUID
     name: str
     code: Optional[str] = None
-    color: Optional[str] = None
     created_at: datetime

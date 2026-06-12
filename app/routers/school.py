@@ -1,13 +1,13 @@
-﻿from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import require_any, require_super_admin
+from app.core.dependencies import require_admin, require_any
 from app.models.school import School
 from app.schemas.school import SchoolResponse, SchoolUpdate
 
-router = APIRouter(prefix="/school")
+router = APIRouter()
 
 
 @router.get("", response_model=SchoolResponse)
@@ -24,7 +24,7 @@ async def get_school(
 @router.patch("", response_model=SchoolResponse)
 async def update_school(
     payload: SchoolUpdate,
-    _: object = Depends(require_super_admin),
+    _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     school = (await db.execute(select(School).limit(1))).scalar_one_or_none()
