@@ -29,22 +29,50 @@ router = APIRouter()
 
 @router.get("", response_model=list[ClassResponse])
 async def list_classes(
+    year_id: UUID | None = Query(None),
+    include_sections: bool = Query(False),
     _: object = Depends(require_any),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = await db.execute(
+    query = (
         select(
             AcademicClass,
             func.count(distinct(Section.id)).label("section_count"),
             func.count(distinct(StudentEnrollment.student_id)).label("student_count"),
         )
         .outerjoin(Section, Section.class_id == AcademicClass.id)
-        .outerjoin(StudentEnrollment, StudentEnrollment.section_id == Section.id)
-        .group_by(AcademicClass.id)
-        .order_by(AcademicClass.created_at.desc())
     )
-    return [
-        {
+    if year_id:
+        query = query.outerjoin(
+            StudentEnrollment,
+            (StudentEnrollment.section_id == Section.id)
+            & (StudentEnrollment.academic_year_id == year_id),
+        )
+    else:
+        query = query.outerjoin(StudentEnrollment, StudentEnrollment.section_id == Section.id)
+    rows = await db.execute(query.group_by(AcademicClass.id).order_by(AcademicClass.created_at.desc()))
+
+    section_rows = []
+    if include_sections:
+        section_rows = list((await db.execute(select(Section).order_by(Section.name.asc()))).scalars().all())
+
+    section_counts: dict = {}
+    if year_id and include_sections:
+        count_rows = (
+            await db.execute(
+                select(
+                    StudentEnrollment.section_id,
+                    func.count(distinct(StudentEnrollment.student_id)),
+                )
+                .where(StudentEnrollment.academic_year_id == year_id)
+                .group_by(StudentEnrollment.section_id)
+            )
+        ).all()
+        section_counts = {row[0]: row[1] for row in count_rows}
+
+    results = []
+    for row in rows:
+        item = {
             "id": row.AcademicClass.id,
             "branch_id": row.AcademicClass.branch_id,
             "grade": row.AcademicClass.grade,
@@ -52,9 +80,21 @@ async def list_classes(
             "section_count": row.section_count,
             "student_count": row.student_count,
             "avg_attendance_pct": 0,
+            "sections": None,
         }
-        for row in rows
-    ]
+        if include_sections:
+            item["sections"] = [
+                {
+                    "id": section.id,
+                    "class_id": section.class_id,
+                    "name": section.name,
+                    "student_count": section_counts.get(section.id, 0),
+                }
+                for section in section_rows
+                if section.class_id == row.AcademicClass.id
+            ]
+        results.append(item)
+    return results
 
 
 @router.get("/{class_id}", response_model=ClassResponse)

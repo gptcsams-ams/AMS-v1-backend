@@ -1,7 +1,7 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -169,10 +169,19 @@ async def create_student(
 
 
 @router.post("/bulk-import")
-async def bulk_import_students(file: UploadFile = File(...), _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def bulk_import_students(
+    file: UploadFile = File(...),
+    academic_year_id: UUID | None = Form(default=None),
+    current_user: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
     data = await file.read()
-    count = await import_students_csv(db, data.decode("utf-8"))
-    return {"imported": count}
+    return await import_students_csv(
+        db,
+        data.decode("utf-8"),
+        academic_year_id,
+        getattr(current_user, "branch_id", None),
+    )
 
 
 @router.post("/{student_id}/faces")
@@ -253,6 +262,9 @@ async def delete_student(student_id: UUID, _: object = Depends(require_admin), d
     row = (await db.execute(select(Student).where(Student.id == student_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Student not found")
-    await db.delete(row)
+    # Use a core DELETE so PostgreSQL handles FK cascades (CASCADE / SET NULL) directly,
+    # avoiding async lazy-load errors that occur when the ORM tries to cascade through
+    # relationships (enrollments, faces, attendance_records, etc.) before deleting.
+    await db.execute(sa_delete(Student).where(Student.id == student_id))
     await db.commit()
     return MessageResponse(message="Student deleted")

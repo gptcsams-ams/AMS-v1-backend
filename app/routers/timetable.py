@@ -104,6 +104,75 @@ async def get_section_timetable(
     }
 
 
+@router.get("/overview")
+async def get_timetable_overview(
+    academic_year_id: UUID | None = Query(default=None),
+    _: object = Depends(require_any),
+    db: AsyncSession = Depends(get_db),
+):
+    class_rows = list((await db.execute(
+        select(AcademicClass).order_by(AcademicClass.created_at.desc())
+    )).scalars().all())
+    if not class_rows:
+        return []
+
+    class_ids = [row.id for row in class_rows]
+    section_rows = list((await db.execute(
+        select(Section)
+        .where(Section.class_id.in_(class_ids))
+        .order_by(Section.name.asc())
+    )).scalars().all())
+    section_ids = [row.id for row in section_rows]
+
+    total_periods: dict[UUID, int] = {}
+    placed_periods: dict[UUID, int] = {}
+    published: dict[UUID, bool] = {}
+
+    if section_ids:
+        slot_stmt = select(PeriodSlot.section_id, func.count(PeriodSlot.id)).where(PeriodSlot.section_id.in_(section_ids))
+        entry_stmt = (
+            select(
+                PeriodSlot.section_id,
+                func.count(TimetableEntry.id),
+                func.bool_or(TimetableEntry.is_published),
+            )
+            .join(TimetableEntry, TimetableEntry.period_slot_id == PeriodSlot.id)
+            .where(PeriodSlot.section_id.in_(section_ids))
+        )
+        if academic_year_id:
+            slot_stmt = slot_stmt.where(PeriodSlot.academic_year_id == academic_year_id)
+            entry_stmt = entry_stmt.where(TimetableEntry.academic_year_id == academic_year_id)
+        slot_counts = await db.execute(slot_stmt.group_by(PeriodSlot.section_id))
+        entry_counts = await db.execute(entry_stmt.group_by(PeriodSlot.section_id))
+        total_periods = {section_id: count for section_id, count in slot_counts.all()}
+        for section_id, count, is_published in entry_counts.all():
+            placed_periods[section_id] = count
+            published[section_id] = bool(is_published)
+
+    sections_by_class: dict[UUID, list[Section]] = {}
+    for section in section_rows:
+        sections_by_class.setdefault(section.class_id, []).append(section)
+
+    return [
+        {
+            "class_id": str(row.id),
+            "grade": row.grade,
+            "sections": [
+                {
+                    "section_id": str(section.id),
+                    "name": section.name,
+                    "is_published": published.get(section.id, False),
+                    "total_periods": total_periods.get(section.id, 0),
+                    "placed_periods": placed_periods.get(section.id, 0),
+                    "homeroom_teacher": None,
+                }
+                for section in sections_by_class.get(row.id, [])
+            ],
+        }
+        for row in class_rows
+    ]
+
+
 @router.get("/sections/{section_id}/days/{day_of_week}")
 async def get_day_timetable(
     section_id: UUID,

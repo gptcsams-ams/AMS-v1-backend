@@ -14,6 +14,15 @@ class ClassUpdate(BaseModel):
     grade: Optional[str] = None
 
 
+class SectionNestedResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    class_id: UUID
+    name: str
+    student_count: Optional[int] = None
+
+
 class ClassResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -24,3 +33,4 @@ class ClassResponse(BaseModel):
     section_count: Optional[int] = None
     student_count: Optional[int] = None
     avg_attendance_pct: Optional[float] = None
+    sections: Optional[list[SectionNestedResponse]] = None
