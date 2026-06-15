@@ -11,7 +11,7 @@ from app.middleware.rate_limit_middleware import RateLimitMiddleware
 from app.routers import (
     parent_portal,
     academic_years, attendance, audit, auth, branding, branches,
-    calendar, cameras, classes, detections, enrollments, leaves,
+    calendar, cameras, classes, classroom_attendance, detections, enrollments, leaves,
     mobile, notifications, parents, reports, school, sections,
     students, subjects, teachers, timetable, websocket,
 )
