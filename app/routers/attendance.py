@@ -4,13 +4,12 @@ from uuid import UUID
 import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import require_admin, require_any
 from app.core.insight_face import get_face_app
-from app.core.redis import get_redis
 from app.models.academic_year import AcademicYear
 from app.models.attendance import Attendance
 from app.models.attendance_window import AttendanceWindow
@@ -26,6 +25,33 @@ from app.services.attendance_service import upsert_attendance
 router = APIRouter()
 
 
+async def _get_or_create_manual_window(db: AsyncSession, section_id: UUID) -> AttendanceWindow:
+    """Return the standing 'Manual Attendance' window for a section, creating it if needed."""
+    manual_window = (
+        await db.execute(
+            select(AttendanceWindow).where(
+                AttendanceWindow.section_id == section_id,
+                AttendanceWindow.name == "Manual Attendance",
+            )
+        )
+    ).scalar_one_or_none()
+
+    if not manual_window:
+        manual_window = AttendanceWindow(
+            section_id=section_id,
+            name="Manual Attendance",
+            start_time=time(0, 0),
+            end_time=time(23, 59),
+            days_of_week=[0, 1, 2, 3, 4, 5, 6],
+            is_manual_trigger=True,
+            is_active=True,
+        )
+        db.add(manual_window)
+        await db.flush()
+
+    return manual_window
+
+
 def _cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
     left_norm = float(np.linalg.norm(left))
     right_norm = float(np.linalg.norm(right))
@@ -35,10 +61,17 @@ def _cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
 
 
 @router.get("/attendance-windows")
-async def list_windows(section_id: UUID | None = Query(default=None), _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    stmt = select(AttendanceWindow)
+async def list_windows(
+    section_id: UUID | None = Query(default=None),
+    active_only: bool = Query(default=False),
+    _: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(AttendanceWindow).where(AttendanceWindow.is_manual_trigger == False)
     if section_id:
         stmt = stmt.where(AttendanceWindow.section_id == section_id)
+    if active_only:
+        stmt = stmt.where(AttendanceWindow.is_active == True)
     rows = await db.execute(stmt)
     return list(rows.scalars().all())
 
@@ -72,39 +105,129 @@ async def delete_window(window_id: UUID, _: object = Depends(require_admin), db:
     return MessageResponse(message="Window deleted")
 
 
+async def _query_attendance(
+    db: AsyncSession,
+    year_id: str | None = None,
+    section_id: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    status: str | None = None,
+    student_id: str | None = None,
+    page: int = 1,
+    limit: int = 100,
+) -> list[dict]:
+    offset = (page - 1) * limit
+    params: dict = {
+        "year_id":    year_id,
+        "section_id": section_id,
+        "student_id": student_id,
+        "from_date":  from_date,
+        "to_date":    to_date,
+        "status":     status,
+        "limit":      limit,
+        "offset":     offset,
+    }
+    rows = await db.execute(text("""
+        SELECT
+            a.id::text,
+            a.attendance_date,
+            a.status,
+            a.detection_count,
+            a.is_overridden,
+            a.marked_by,
+            a.data_confidence,
+            a.first_detected_at,
+            a.override_reason,
+            a.student_id::text,
+            a.section_id::text,
+            a.academic_year_id::text,
+            s.first_name || ' ' || s.last_name AS student_name,
+            s.admission_number,
+            s.student_photo_url,
+            sec.name      AS section_name,
+            c.grade,
+            sub.name      AS subject_name,
+            sub.color     AS subject_color,
+            aw.name       AS window_name,
+            aw.start_time AS window_start,
+            aw.end_time   AS window_end
+        FROM attendance a
+        JOIN students  s   ON s.id   = a.student_id
+        JOIN sections  sec ON sec.id = a.section_id
+        JOIN classes   c   ON c.id   = sec.class_id
+        LEFT JOIN attendance_windows aw  ON aw.id  = a.attendance_window_id
+        LEFT JOIN timetable_entries  te  ON te.id  = aw.timetable_entry_id
+        LEFT JOIN subjects           sub ON sub.id = te.subject_id
+        WHERE (:year_id    IS NULL OR a.academic_year_id = CAST(:year_id AS uuid))
+          AND (:section_id IS NULL OR a.section_id       = CAST(:section_id AS uuid))
+          AND (:student_id IS NULL OR a.student_id       = CAST(:student_id AS uuid))
+          AND (:from_date  IS NULL OR a.attendance_date >= :from_date::date)
+          AND (:to_date    IS NULL OR a.attendance_date <= :to_date::date)
+          AND (:status     IS NULL OR a.status           = :status)
+        ORDER BY a.attendance_date DESC, student_name
+        LIMIT :limit OFFSET :offset
+    """), params)
+    return [dict(r) for r in rows.mappings().fetchall()]
+
+
 @router.get("/attendance")
 async def list_attendance(
-    section_id: UUID | None = Query(default=None),
+    section_id:       UUID | None = Query(default=None),
     academic_year_id: UUID | None = Query(default=None),
-    attendance_date: date | None = Query(default=None),
+    student_id:       UUID | None = Query(default=None),
+    attendance_date:  date | None = Query(default=None),
+    from_date:        date | None = Query(default=None),
+    to_date:          date | None = Query(default=None),
+    status:           str  | None = Query(default=None),
+    page:             int         = Query(default=1, ge=1),
+    limit:            int         = Query(default=100, ge=1, le=500),
     _: object = Depends(require_any),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(
-        Attendance.id,
-        Attendance.student_id,
-        Attendance.section_id,
-        Attendance.academic_year_id,
-        Attendance.attendance_date,
-        Attendance.status,
-        Attendance.marked_by,
-        Attendance.is_overridden,
+    # attendance_date is a convenience alias for from_date == to_date
+    resolved_from = str(from_date or attendance_date) if (from_date or attendance_date) else None
+    resolved_to   = str(to_date   or attendance_date) if (to_date   or attendance_date) else None
+
+    return await _query_attendance(
+        db         = db,
+        year_id    = str(academic_year_id) if academic_year_id else None,
+        section_id = str(section_id)       if section_id       else None,
+        student_id = str(student_id)       if student_id       else None,
+        from_date  = resolved_from,
+        to_date    = resolved_to,
+        status     = status,
+        page       = page,
+        limit      = limit,
     )
-    if section_id:
-        stmt = stmt.where(Attendance.section_id == section_id)
-    if academic_year_id:
-        stmt = stmt.where(Attendance.academic_year_id == academic_year_id)
-    if attendance_date:
-        stmt = stmt.where(Attendance.attendance_date == attendance_date)
-    rows = await db.execute(stmt)
-    return [row._asdict() for row in rows.all()]
 
 
 @router.get("/attendance/live/{window_id}")
-async def get_live_attendance(window_id: UUID, _: object = Depends(require_admin)):
-    redis = get_redis()
-    key = f"attendance:live:{window_id}:{date.today().isoformat()}"
-    return await redis.hgetall(key)
+async def get_live_attendance(
+    window_id: UUID,
+    _: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import text
+    result = await db.execute(text("""
+        SELECT
+            a.student_id::text,
+            a.status,
+            a.first_detected_at,
+            a.detection_count,
+            a.data_confidence,
+            a.is_overridden,
+            a.marked_by,
+            s.first_name || ' ' || s.last_name AS name,
+            s.roll_number,
+            s.student_photo_url,
+            a.id::text AS attendance_id
+        FROM attendance a
+        JOIN students s ON s.id = a.student_id
+        WHERE a.attendance_window_id = :wid AND a.attendance_date = CURRENT_DATE
+        ORDER BY s.first_name
+    """), {"wid": str(window_id)})
+    rows = result.mappings().fetchall()
+    return [dict(r) for r in rows]
 
 
 @router.post("/attendance/detect-faces")
@@ -240,6 +363,11 @@ async def scan_frame(
     now = datetime.utcnow()
     today = date.today()
 
+    # Resolve window once — avoids repeated DB hits inside the face loop
+    resolved_window_id: UUID | None = attendance_window_id
+    if resolved_window_id is None and len(detected_faces) > 0:
+        resolved_window_id = (await _get_or_create_manual_window(db, section_id)).id
+
     for detected in detected_faces:
         detected_embedding = np.asarray(detected.embedding, dtype=np.float32)
         detected_norm = np.linalg.norm(detected_embedding)
@@ -286,13 +414,13 @@ async def scan_frame(
                 "face_image_url": best_face.image_url,
                 "face_quality": best_face.quality_score,
             }
-            if attendance_window_id and best_student.id not in marked_ids:
+            if best_student.id not in marked_ids and resolved_window_id is not None:
                 await upsert_attendance(
                     db,
                     student_id=best_student.id,
                     section_id=section_id,
                     academic_year_id=academic_year_id,
-                    attendance_window_id=attendance_window_id,
+                    attendance_window_id=resolved_window_id,
                     attendance_date=today,
                     detected_at=now,
                     status="PRESENT",
@@ -343,13 +471,16 @@ async def mark_manual(payload: AttendanceManualMarkRequest, _: object = Depends(
 @router.post("/attendance/mark-bulk")
 async def mark_bulk(payload: AttendanceBulkMarkRequest, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     detected_at = payload.attendance_date
+    window_id = payload.attendance_window_id
+    if window_id is None:
+        window_id = (await _get_or_create_manual_window(db, payload.section_id)).id
     for student_id in payload.student_ids:
         await upsert_attendance(
             db,
             student_id=student_id,
             section_id=payload.section_id,
             academic_year_id=payload.academic_year_id,
-            attendance_window_id=payload.attendance_window_id,
+            attendance_window_id=window_id,
             attendance_date=payload.attendance_date.date(),
             detected_at=detected_at,
             status=payload.status,
@@ -391,27 +522,7 @@ async def mark_classroom(payload: ClassroomManualMarkRequest, _: object = Depend
 
         academic_year_id = current_year.id
 
-    manual_window = (
-        await db.execute(
-            select(AttendanceWindow).where(
-                AttendanceWindow.section_id == payload.section_id,
-                AttendanceWindow.name == "Manual Attendance",
-            )
-        )
-    ).scalar_one_or_none()
-
-    if not manual_window:
-        manual_window = AttendanceWindow(
-            section_id=payload.section_id,
-            name="Manual Attendance",
-            start_time=time(0, 0),
-            end_time=time(23, 59),
-            days_of_week=[0, 1, 2, 3, 4, 5, 6],
-            is_manual_trigger=True,
-            is_active=True,
-        )
-        db.add(manual_window)
-        await db.flush()
+    manual_window = await _get_or_create_manual_window(db, payload.section_id)
 
     await upsert_attendance(
         db,

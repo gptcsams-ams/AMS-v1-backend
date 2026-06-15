@@ -1,13 +1,13 @@
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.core.redis import close_redis, init_redis
+from app.core.database import AsyncSessionLocal
 from app.middleware.audit_middleware import AuditMiddleware
 from app.middleware.if_modified_since_middleware import IfModifiedSinceMiddleware
-from app.middleware.rate_limit_middleware import RateLimitMiddleware
 from app.routers import (
     parent_portal,
     academic_years, attendance, audit, auth, branding, branches,
@@ -17,15 +17,23 @@ from app.routers import (
 )
 
 PREFIX = "/api/v1"
+log    = logging.getLogger("startup")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    await init_redis()
-    try:
-        yield
-    finally:
-        await close_redis()
+    log.info("AMS API starting up...")
+
+    async with AsyncSessionLocal() as db:
+        from app.core.auth_token_store import cleanup_expired_tokens
+        await cleanup_expired_tokens(db)
+
+        from app.services.embedding_cache_service import load_all_sections_on_startup
+        await load_all_sections_on_startup(db)
+
+    log.info("AMS API ready")
+    yield
+    log.info("AMS API shutting down")
 
 
 app = FastAPI(title="AMS Backend", version="2.0.0", lifespan=lifespan)
@@ -40,7 +48,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(RateLimitMiddleware)
 app.add_middleware(AuditMiddleware)
 app.add_middleware(IfModifiedSinceMiddleware)
 

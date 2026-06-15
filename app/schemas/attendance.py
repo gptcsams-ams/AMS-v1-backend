@@ -22,7 +22,7 @@ class AttendanceBulkMarkRequest(BaseModel):
     student_ids: list[UUID]
     section_id: UUID
     academic_year_id: UUID
-    attendance_window_id: UUID
+    attendance_window_id: Optional[UUID] = None
     attendance_date: datetime
     status: str = "PRESENT"
 

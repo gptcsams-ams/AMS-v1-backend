@@ -125,14 +125,26 @@ async def get_class(
     }
 
 
-@router.get("/{class_id}/sections", response_model=list[SectionResponse])
+@router.get("/{class_id}/sections")
 async def get_class_sections(
     class_id: UUID,
+    year_id:  UUID | None = Query(default=None),
     _: object = Depends(require_any),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = await db.execute(select(Section).where(Section.class_id == class_id).order_by(Section.name.asc()))
-    return list(rows.scalars().all())
+    from app.services.class_service import get_class_sections_with_stats
+    from sqlalchemy import text as sa_text
+
+    if not year_id:
+        row = (await db.execute(
+            sa_text("SELECT id::text FROM academic_years WHERE is_current=TRUE LIMIT 1")
+        )).fetchone()
+        year_id_str = row[0] if row else None
+    else:
+        year_id_str = str(year_id)
+
+    sections = await get_class_sections_with_stats(str(class_id), year_id_str, db)
+    return {"data": sections}
 
 
 @router.get("/{class_id}/attendance")

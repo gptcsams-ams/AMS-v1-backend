@@ -1,14 +1,12 @@
-import json
-from datetime import datetime
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import require_admin
-from app.core.redis import get_redis
 from app.models.academic_record import AcademicRecord
 from app.schemas.report import ReportJobCreate
 from app.services.report_service import queue_report_card
@@ -35,10 +33,29 @@ async def generate_report_card(payload: ReportJobCreate, _: object = Depends(req
     return await queue_report_card(str(payload.student_id), str(payload.academic_year_id))
 
 
-@router.get("/jobs/{job_id}")
-async def report_job_status(job_id: str, _: object = Depends(require_admin)):
-    redis = get_redis()
-    raw = await redis.get(f"report_job:{job_id}")
-    if not raw:
-        raise HTTPException(status_code=404, detail="Report job not found")
-    return json.loads(raw)
+@router.get("/attendance/daily")
+async def daily_attendance_report(
+    branch_id: str | None = Query(default=None),
+    year_id:   str | None = Query(default=None),
+    date_str:  str | None = Query(default=None, alias="date"),
+    current_user: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.dashboard_service import get_dashboard_stats
+
+    if not year_id:
+        row = (await db.execute(
+            text("SELECT id::text FROM academic_years WHERE is_current=TRUE LIMIT 1")
+        )).fetchone()
+        year_id = row[0] if row else None
+    if not year_id:
+        raise HTTPException(400, detail={"code": "NO_ACADEMIC_YEAR",
+                                          "message": "No current academic year configured"})
+
+    stats = await get_dashboard_stats(
+        branch_id  = branch_id or str(getattr(current_user, "branch_id", "")),
+        year_id    = year_id,
+        today_date = date_str or str(date.today()),
+        db         = db,
+    )
+    return {"data": stats}

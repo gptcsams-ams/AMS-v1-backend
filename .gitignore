@@ -57,3 +57,7 @@ docker-compose.override.yml
 
 # Misc
 IMPLEMENTATION_TRACK*
+
+# Face embedding cache files — generated at runtime
+media/embeddings/
+*.npy

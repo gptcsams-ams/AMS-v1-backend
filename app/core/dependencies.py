@@ -1,11 +1,9 @@
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-import redis.asyncio as aioredis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.redis import get_redis
 from app.core.security import decode_access_token
 from app.models.user import User
 
@@ -16,28 +14,20 @@ bearer = HTTPBearer()
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer),
     db: AsyncSession = Depends(get_db),
-    redis: aioredis.Redis = Depends(get_redis),
 ) -> User:
-    token = credentials.credentials
+    token   = credentials.credentials
     payload = decode_access_token(token)
     if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    try:
-        if await redis.exists(f"blacklist:token:{token}"):
-            raise HTTPException(status_code=401, detail="Token revoked")
-    except HTTPException:
-        raise
-    except Exception:
-        # Local development can run without Redis; token expiry is still enforced by JWT.
-        pass
-
+        raise HTTPException(status_code=401, detail={"code": "TOKEN_EXPIRED",
+                                                      "message": "Invalid or expired token"})
+    # Redis blacklist removed — JWT expires naturally in 15 minutes.
     result = await db.execute(
         select(User).where(User.id == payload.get("sub"), User.is_active == True)
     )
     user = result.scalar_one_or_none()
     if not user:
-        raise HTTPException(status_code=401, detail="User not found or inactive")
+        raise HTTPException(status_code=401, detail={"code": "USER_NOT_FOUND",
+                                                      "message": "User not found or inactive"})
     return user
 
 

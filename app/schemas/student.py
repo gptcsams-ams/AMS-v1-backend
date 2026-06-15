@@ -1,4 +1,4 @@
-﻿from datetime import date, datetime
+from datetime import date, datetime
 from typing import Optional
 from uuid import UUID
 
@@ -37,6 +37,15 @@ class StudentUpdate(BaseModel):
     group_name: Optional[str] = None
     join_date: Optional[date] = None
     is_active: Optional[bool] = None
+    section_id: Optional[UUID] = None
+    academic_year_id: Optional[UUID] = None
+
+
+class SectionRef(BaseModel):
+    id: UUID
+    class_id: UUID
+    name: str
+    grade: str
 
 
 class StudentResponse(BaseModel):
@@ -61,6 +70,7 @@ class StudentResponse(BaseModel):
     face_count: int = 0
     is_active: bool
     created_at: datetime
+    section: Optional[SectionRef] = None
 
 
 class StudentFaceResponse(BaseModel):

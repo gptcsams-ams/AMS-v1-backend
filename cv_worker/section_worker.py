@@ -16,7 +16,11 @@ from app.models.attendance_window import AttendanceWindow
 from app.models.camera import Camera
 from app.models.student_enrollment import StudentEnrollment
 from app.services.attendance_service import upsert_attendance
-from app.services.embedding_cache_service import EmbeddingCacheService
+from app.services.embedding_cache_service import (
+    EmbeddingCacheService,
+    get_section_embeddings,
+    evict_section,
+)
 from cv_worker.face_detector import detect_faces
 from cv_worker.face_matcher import match_face
 
@@ -65,7 +69,8 @@ async def _run_burst(
     cap: cv2.VideoCapture,
     end_time: datetime,
     interval_secs: int,
-    embeddings: dict[str, list[np.ndarray]],
+    embeddings: np.ndarray,
+    student_ids: list,
     window: AttendanceWindow,
     section_id: UUID,
     academic_year_id: UUID,
@@ -86,13 +91,15 @@ async def _run_burst(
 
             async with AsyncSessionLocal() as db:
                 for face in detected:
-                    student_id, dist, status = match_face(
-                        face.embedding, embeddings, threshold=threshold
+                    student_id, score, status = match_face(
+                        query_embedding=face.normed_embedding,
+                        embeddings=embeddings,
+                        student_ids=student_ids,
+                        threshold=threshold,
                     )
                     if status == "UNKNOWN" or student_id is None:
                         continue
 
-                    # Resolve academic_year_id from enrollment if not passed directly
                     await upsert_attendance(
                         db,
                         student_id=UUID(student_id),
@@ -102,14 +109,13 @@ async def _run_burst(
                         attendance_date=attendance_date,
                         detected_at=_now(),
                         status="PRESENT",
+                        data_confidence="LOW" if status == "LOW_CONFIDENCE" else "HIGH",
                     )
                     logger.info(
-                        "window=%s student=%s matched dist=%.3f status=%s",
-                        window.id, student_id, dist, status,
+                        "window=%s student=%s score=%.3f status=%s",
+                        window.id, student_id, score, status,
                     )
 
-        # Sleep until next sample, but wake early if burst is over
-        sleep_until = _now() + timedelta(seconds=interval_secs)
         remaining = (end_time - _now()).total_seconds()
         await asyncio.sleep(min(interval_secs, max(0, remaining)))
 
@@ -154,16 +160,15 @@ async def run_section_window(
         interval,
     )
 
-    # Load embeddings for this section once
+    # Load embeddings for this section once (L1 cache → disk → DB)
     async with AsyncSessionLocal() as db:
-        raw = await EmbeddingCacheService.load_section_embeddings(db, str(window.section_id), str(academic_year_id))
+        emb_matrix, student_ids = await get_section_embeddings(
+            section_id=str(window.section_id),
+            academic_year_id=str(academic_year_id),
+            db=db,
+        )
 
-    embeddings: dict[str, list[np.ndarray]] = {
-        sid: [np.array(e, dtype=np.float32) for e in emb_list]
-        for sid, emb_list in raw.items()
-    }
-
-    if not embeddings:
+    if len(student_ids) == 0:
         logger.warning("window=%s — no enrolled student embeddings found, aborting", window.id)
         return
 
@@ -187,7 +192,8 @@ async def run_section_window(
                 cap=cap,
                 end_time=burst1_end,
                 interval_secs=interval,
-                embeddings=embeddings,
+                embeddings=emb_matrix,
+                student_ids=student_ids,
                 window=window,
                 section_id=window.section_id,
                 academic_year_id=academic_year_id,
@@ -209,7 +215,8 @@ async def run_section_window(
                 cap=cap,
                 end_time=burst2_end,
                 interval_secs=interval,
-                embeddings=embeddings,
+                embeddings=emb_matrix,
+                student_ids=student_ids,
                 window=window,
                 section_id=window.section_id,
                 academic_year_id=academic_year_id,
@@ -230,8 +237,9 @@ async def run_section_window(
         # Finalize: mark students below min_detections as ABSENT
         async with AsyncSessionLocal() as db:
             from app.services.attendance_service import finalize_window
-            result = await finalize_window(db, window.id, today)
+            result = await finalize_window(db, window.id, today, academic_year_id)
             logger.info("window=%s — finalized: %s", window.id, result)
+        evict_section(str(window.section_id), str(academic_year_id))
 
 
 def now_utc() -> datetime:

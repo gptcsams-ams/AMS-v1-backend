@@ -21,6 +21,13 @@ async def get_school(
     return school
 
 
+@router.get("/embedding-cache-stats")
+async def embedding_cache_stats(_: object = Depends(require_admin)):
+    """Returns current in-memory embedding cache stats for diagnostics."""
+    from app.services.embedding_cache_service import get_cache_stats
+    return {"data": get_cache_stats()}
+
+
 @router.patch("", response_model=SchoolResponse)
 async def update_school(
     payload: SchoolUpdate,

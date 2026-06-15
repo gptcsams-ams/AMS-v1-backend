@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import delete as sa_delete, select
+from sqlalchemy import delete as sa_delete, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,12 +15,114 @@ from app.models.student_face import StudentFace
 from app.models.student_enrollment import StudentEnrollment
 from app.schemas.common import MessageResponse
 from app.schemas.student import StudentCreate, StudentFaceResponse, StudentResponse, StudentUpdate
-from app.services.embedding_cache_service import invalidate_section_cache
+from app.services.embedding_cache_service import invalidate_student_in_all_sections
 from app.services.face_embedding_service import analyze_face_upload
 from app.services.imagekit_service import upload_imagekit_file
 from app.services.student_service import import_students_csv
 
 router = APIRouter()
+
+
+async def _query_students(
+    db: AsyncSession,
+    section_id: str | None = None,
+    year_id: str | None = None,
+    search: str | None = None,
+    page: int = 1,
+    limit: int = 200,
+) -> list[dict]:
+    offset = (page - 1) * limit
+    filters = ["s.is_active = TRUE"]
+    params: dict = {"limit": limit, "offset": offset}
+
+    if section_id and year_id:
+        filters.append(
+            "EXISTS (SELECT 1 FROM student_enrollments se "
+            "WHERE se.student_id = s.id AND se.section_id = CAST(:section_id AS uuid) "
+            "AND se.academic_year_id = CAST(:year_id AS uuid) AND se.status = 'ACTIVE')"
+        )
+        params["section_id"] = section_id
+        params["year_id"] = year_id
+    elif section_id:
+        filters.append(
+            "EXISTS (SELECT 1 FROM student_enrollments se "
+            "WHERE se.student_id = s.id AND se.section_id = CAST(:section_id AS uuid) "
+            "AND se.status = 'ACTIVE')"
+        )
+        params["section_id"] = section_id
+    elif year_id:
+        filters.append(
+            "EXISTS (SELECT 1 FROM student_enrollments se "
+            "WHERE se.student_id = s.id AND se.academic_year_id = CAST(:year_id AS uuid) "
+            "AND se.status = 'ACTIVE')"
+        )
+        params["year_id"] = year_id
+
+    if search:
+        filters.append(
+            "(s.first_name ILIKE :search OR s.last_name ILIKE :search "
+            "OR s.admission_number ILIKE :search)"
+        )
+        params["search"] = f"%{search}%"
+
+    where_clause = " AND ".join(filters)
+
+    rows = await db.execute(text(f"""
+        SELECT
+            s.id::text,
+            s.first_name,
+            s.last_name,
+            s.admission_number,
+            s.roll_number,
+            s.student_photo_url,
+            s.is_active,
+            s.gender,
+            s.blood_group,
+            s.dob,
+            s.contact_number,
+            s.email,
+            s.group_name,
+            s.branch_id::text,
+            s.join_date,
+            s.created_at,
+            COALESCE(sec.id::text, '')     AS section_id,
+            COALESCE(sec.name, '')         AS section_name,
+            COALESCE(c.id::text, '')       AS class_id,
+            COALESCE(c.grade, '')          AS grade,
+            COALESCE(fc.face_count, 0)     AS face_count,
+            fc.face_image_url              AS face_image_url,
+            COALESCE(att.present, 0)       AS total_present,
+            COALESCE(att.total, 0)         AS total_days,
+            CASE
+                WHEN COALESCE(att.total, 0) = 0 THEN 0.0
+                ELSE ROUND(att.present::numeric / att.total * 100, 1)
+            END                            AS overall_attendance_pct
+        FROM students s
+        LEFT JOIN sections sec ON sec.id = (
+            SELECT section_id FROM student_enrollments
+            WHERE student_id = s.id AND status = 'ACTIVE'
+            ORDER BY created_at DESC LIMIT 1
+        )
+        LEFT JOIN classes c ON c.id = sec.class_id
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS face_count, MIN(image_url) AS face_image_url
+            FROM student_faces sf
+            WHERE sf.student_id = s.id AND sf.is_active = TRUE
+        ) fc ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT
+                COUNT(*) FILTER (WHERE status IN ('PRESENT','LATE')) AS present,
+                COUNT(*)                                               AS total
+            FROM attendance a
+            WHERE a.student_id = s.id
+              {("AND a.academic_year_id = CAST(:year_id AS uuid)" if year_id else "")}
+        ) att ON TRUE
+        WHERE {where_clause}
+        ORDER BY s.first_name, s.last_name
+        LIMIT :limit OFFSET :offset
+    """), params)
+
+    return [dict(r) for r in rows.mappings().fetchall()]
 
 
 async def _with_face_summary(db: AsyncSession, students: list[Student]) -> list[dict]:
@@ -39,33 +141,54 @@ async def _with_face_summary(db: AsyncSession, students: list[Student]) -> list[
         face_counts[student_id] = face_counts.get(student_id, 0) + 1
         face_images.setdefault(student_id, image_url)
 
+    from app.models.section import Section
+    from app.models.academic_class import AcademicClass
+
+    enrollment_rows = await db.execute(
+        select(StudentEnrollment.student_id, Section.id, Section.class_id, Section.name, AcademicClass.grade)
+        .join(Section, StudentEnrollment.section_id == Section.id)
+        .join(AcademicClass, Section.class_id == AcademicClass.id)
+        .where(StudentEnrollment.student_id.in_(student_ids), StudentEnrollment.status == "ACTIVE")
+    )
+
+    sections_by_student: dict[UUID, dict] = {}
+    for student_id, section_id, class_id, name, grade in enrollment_rows.all():
+        sections_by_student[student_id] = {
+            "id": section_id,
+            "class_id": class_id,
+            "name": name,
+            "grade": grade,
+        }
+
     return [
         {
             **StudentResponse.model_validate(student).model_dump(),
             "face_count": face_counts.get(student.id, 0),
             "face_image_url": face_images.get(student.id),
+            "section": sections_by_student.get(student.id),
         }
         for student in students
     ]
 
 
-@router.get("", response_model=list[StudentResponse])
+@router.get("")
 async def list_students(
     section_id: UUID | None = Query(default=None),
     year_id: UUID | None = Query(default=None),
+    search: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=200, ge=1, le=500),
     _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(Student)
-    if section_id or year_id:
-        stmt = stmt.join(StudentEnrollment, StudentEnrollment.student_id == Student.id)
-    if section_id:
-        stmt = stmt.where(StudentEnrollment.section_id == section_id)
-    if year_id:
-        stmt = stmt.where(StudentEnrollment.academic_year_id == year_id)
-
-    rows = await db.execute(stmt.where(Student.is_active == True).order_by(Student.created_at.desc()))
-    return await _with_face_summary(db, list(rows.scalars().all()))
+    return await _query_students(
+        db=db,
+        section_id=str(section_id) if section_id else None,
+        year_id=str(year_id) if year_id else None,
+        search=search,
+        page=page,
+        limit=limit,
+    )
 
 
 @router.get("/{student_id}", response_model=StudentResponse)
@@ -165,7 +288,7 @@ async def create_student(
         raise HTTPException(status_code=400, detail="Could not add student. Please check the selected class, section, and academic year.")
 
     await db.refresh(row)
-    return row
+    return (await _with_face_summary(db, [row]))[0]
 
 
 @router.post("/bulk-import")
@@ -205,7 +328,7 @@ async def add_student_face(student_id: UUID, image: UploadFile = File(...), _: o
     db.add(face)
     await db.commit()
     await db.refresh(face)
-    await invalidate_section_cache(db, student_id)
+    await invalidate_student_in_all_sections(str(student_id), db)
     return {
         "message": "Face uploaded",
         "face_id": str(face.id),
@@ -235,15 +358,103 @@ async def upload_student_photo(
 
 
 @router.patch("/{student_id}", response_model=StudentResponse)
-async def update_student(student_id: UUID, payload: StudentUpdate, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def update_student(
+    student_id: UUID,
+    payload: StudentUpdate,
+    _: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
     row = (await db.execute(select(Student).where(Student.id == student_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Student not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+
+    # Pop enrollment fields so they are NOT passed to the Student model
+    data = payload.model_dump(exclude_unset=True)
+    section_id = data.pop("section_id", None)
+    academic_year_id = data.pop("academic_year_id", None)
+    roll_number = data.pop("roll_number", None)
+
+    # Update core student fields
+    for key, value in data.items():
         setattr(row, key, value)
+
+    # Sync roll_number on student record
+    if roll_number is not None:
+        row.roll_number = roll_number
+
+    from sqlalchemy import func
+
+    # Case 1: Both section + year provided → upsert enrollment
+    if section_id and academic_year_id:
+        target_roll = roll_number or row.roll_number
+
+        # Ensure roll uniqueness within section+year (exclude self)
+        dup = (await db.execute(
+            select(StudentEnrollment).where(
+                StudentEnrollment.section_id == section_id,
+                StudentEnrollment.academic_year_id == academic_year_id,
+                StudentEnrollment.roll_number == target_roll,
+                StudentEnrollment.student_id != student_id,
+            )
+        )).scalar_one_or_none()
+        if dup:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Roll number '{target_roll}' already exists in this section for the selected academic year.",
+            )
+
+        enrollment = (await db.execute(
+            select(StudentEnrollment).where(
+                StudentEnrollment.student_id == student_id,
+                StudentEnrollment.academic_year_id == academic_year_id,
+            )
+        )).scalar_one_or_none()
+
+        if enrollment:
+            enrollment.section_id = section_id
+            enrollment.roll_number = target_roll
+        else:
+            db.add(StudentEnrollment(
+                student_id=row.id,
+                section_id=section_id,
+                academic_year_id=academic_year_id,
+                roll_number=target_roll,
+                enrolled_at=row.join_date or func.current_date(),
+            ))
+
+    # Case 2: Only roll_number provided → update existing active enrollment
+    elif roll_number is not None:
+        active = (await db.execute(
+            select(StudentEnrollment)
+            .where(
+                StudentEnrollment.student_id == student_id,
+                StudentEnrollment.status == "ACTIVE",
+            )
+            .order_by(StudentEnrollment.created_at.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+
+        if active:
+            dup = (await db.execute(
+                select(StudentEnrollment).where(
+                    StudentEnrollment.section_id == active.section_id,
+                    StudentEnrollment.academic_year_id == active.academic_year_id,
+                    StudentEnrollment.roll_number == roll_number,
+                    StudentEnrollment.student_id != student_id,
+                )
+            )).scalar_one_or_none()
+            if dup:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Roll number '{roll_number}' already exists in this section.",
+                )
+            active.roll_number = roll_number
+
+    # Case 3: No enrollment fields → only student core fields updated above
+
     await db.commit()
     await db.refresh(row)
-    return row
+    return (await _with_face_summary(db, [row]))[0]
 
 
 @router.delete("/{student_id}/faces/{face_id}", response_model=MessageResponse)
@@ -253,7 +464,7 @@ async def delete_face(student_id: UUID, face_id: UUID, _: object = Depends(requi
         raise HTTPException(status_code=404, detail="Face not found")
     await db.delete(row)
     await db.commit()
-    await invalidate_section_cache(db, student_id)
+    await invalidate_student_in_all_sections(str(student_id), db)
     return MessageResponse(message="Face deleted")
 
 
