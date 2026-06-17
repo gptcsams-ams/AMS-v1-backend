@@ -1,6 +1,7 @@
 """
 Single CTE query replaces 6-8 separate DB calls on dashboard load.
 """
+from datetime import date
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
@@ -11,6 +12,9 @@ async def get_dashboard_stats(
     today_date: str,
     db: AsyncSession,
 ) -> dict:
+    # asyncpg requires a real date object, not a string
+    if isinstance(today_date, str):
+        today_date = date.fromisoformat(today_date)
     result = await db.execute(text("""
         WITH enrolled AS (
             SELECT COUNT(DISTINCT se.student_id) AS total

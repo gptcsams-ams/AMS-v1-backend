@@ -26,7 +26,7 @@ from app.schemas.timetable import (
     TimetableEntryCreate,
     TimetableEntryUpdate,
 )
-from app.services.timetable_service import check_teacher_conflict, generate_draft, publish_timetable
+from app.services.timetable_service import auto_generate_all, check_teacher_conflict, generate_draft, publish_timetable
 
 router = APIRouter()
 
@@ -401,6 +401,16 @@ async def delete_entry(entry_id: UUID, _: object = Depends(require_admin), db: A
     await db.delete(row)
     await db.commit()
     return MessageResponse(message="Entry deleted")
+
+
+@router.post("/auto-generate")
+async def auto_generate_timetable(
+    branch_id: UUID = Query(...),
+    year_id: UUID = Query(...),
+    _: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    return await auto_generate_all(db, branch_id, year_id)
 
 
 @router.post("/sections/{section_id}/generate-draft")

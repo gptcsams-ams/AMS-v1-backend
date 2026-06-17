@@ -555,6 +555,143 @@ async def section_report(section_id: UUID, _: object = Depends(require_admin), d
 
 
 @router.get("/attendance/report/defaulters")
-async def defaulters_report(_: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    rows = await db.execute(select(Attendance).where(Attendance.status == "ABSENT"))
-    return list(rows.scalars().all())
+async def defaulters_report(
+    year_id:   str | None = Query(default=None),
+    branch_id: str | None = Query(default=None),
+    limit:     int        = Query(default=20),
+    current_user: object  = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Students whose attendance % < 75% in the given year, sorted worst-first."""
+    effective_branch = branch_id or str(getattr(current_user, "branch_id", ""))
+    if not year_id:
+        row = (await db.execute(
+            text("SELECT id::text FROM academic_years WHERE is_current=TRUE LIMIT 1")
+        )).fetchone()
+        year_id = row[0] if row else None
+
+    rows = (await db.execute(text("""
+        SELECT
+            s.id::text                                                   AS student_id,
+            s.first_name || ' ' || s.last_name                         AS student_name,
+            s.admission_number,
+            cl.grade || '-' || sec.name                                AS section,
+            COUNT(*)::float                                             AS total_days,
+            COUNT(*) FILTER (WHERE a.status IN ('PRESENT','LATE'))::float AS present_days,
+            ROUND(
+                COUNT(*) FILTER (WHERE a.status IN ('PRESENT','LATE'))::numeric
+                / NULLIF(COUNT(*),0) * 100, 1
+            )                                                           AS pct
+        FROM attendance a
+        JOIN students  s   ON s.id   = a.student_id
+        JOIN sections  sec ON sec.id = a.section_id
+        JOIN classes   cl  ON cl.id  = sec.class_id
+        WHERE cl.branch_id        = :branch_id
+          AND a.academic_year_id  = :year_id
+        GROUP BY s.id, s.first_name, s.last_name, s.admission_number, cl.grade, sec.name
+        HAVING COUNT(*) > 0
+           AND COUNT(*) FILTER (WHERE a.status IN ('PRESENT','LATE'))::float
+               / NULLIF(COUNT(*),0) < 0.75
+        ORDER BY pct ASC
+        LIMIT :lim
+    """), {"branch_id": effective_branch, "year_id": year_id, "lim": limit})).mappings().fetchall()
+
+    return [dict(r) for r in rows]
+
+
+@router.get("/attendance/report/sections-summary")
+async def sections_summary(
+    branch_id: str | None = Query(default=None),
+    year_id:   str | None = Query(default=None),
+    current_user: object  = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Attendance % per section for the current day — powers the section bar chart."""
+    from datetime import date as _date
+    effective_branch = branch_id or str(getattr(current_user, "branch_id", ""))
+    if not year_id:
+        row = (await db.execute(
+            text("SELECT id::text FROM academic_years WHERE is_current=TRUE LIMIT 1")
+        )).fetchone()
+        year_id = row[0] if row else None
+
+    today = _date.today()
+    rows = (await db.execute(text("""
+        SELECT
+            cl.id::text  AS class_id,
+            cl.grade,
+            sec.id::text AS section_id,
+            sec.name     AS section_name,
+            COUNT(*)                                                       AS total,
+            COUNT(*) FILTER (WHERE a.status IN ('PRESENT','LATE'))        AS present,
+            ROUND(
+                COUNT(*) FILTER (WHERE a.status IN ('PRESENT','LATE'))::numeric
+                / NULLIF(COUNT(*), 0) * 100, 1
+            ) AS pct
+        FROM attendance a
+        JOIN sections sec ON sec.id = a.section_id
+        JOIN classes  cl  ON cl.id  = sec.class_id
+        WHERE cl.branch_id       = :branch_id
+          AND a.academic_year_id = :year_id
+          AND a.attendance_date  = :today
+        GROUP BY cl.id, cl.grade, sec.id, sec.name
+        ORDER BY cl.grade, sec.name
+    """), {"branch_id": effective_branch, "year_id": year_id, "today": today})).mappings().fetchall()
+
+    return [dict(r) for r in rows]
+
+
+@router.get("/attendance/report/section-overview")
+async def section_overview(
+    branch_id: str | None = Query(default=None),
+    year_id:   str | None = Query(default=None),
+    current_user: object  = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-section summary for the overview cards grid on the dashboard."""
+    from datetime import date as _date
+    effective_branch = branch_id or str(getattr(current_user, "branch_id", ""))
+    if not year_id:
+        row = (await db.execute(
+            text("SELECT id::text FROM academic_years WHERE is_current=TRUE LIMIT 1")
+        )).fetchone()
+        year_id = row[0] if row else None
+
+    today = _date.today()
+    rows = (await db.execute(text("""
+        SELECT
+            sec.id::text AS section_id,
+            cl.grade,
+            sec.name     AS section_name,
+            cl.id::text  AS class_id,
+            (SELECT COUNT(*) FROM student_enrollments se2
+             WHERE se2.section_id = sec.id
+               AND se2.academic_year_id = :year_id
+               AND se2.status = 'ACTIVE')              AS enrolled,
+            COUNT(a.id)                                AS marked,
+            COUNT(a.id)                                AS total,
+            COUNT(a.id) FILTER (WHERE a.status IN ('PRESENT','LATE')) AS present,
+            COUNT(a.id) FILTER (WHERE a.status = 'ABSENT')            AS absent,
+            COUNT(a.id) FILTER (WHERE a.status = 'LATE')              AS late,
+            COALESCE(ROUND(
+                COUNT(a.id) FILTER (WHERE a.status IN ('PRESENT','LATE'))::numeric
+                / NULLIF(COUNT(a.id), 0) * 100, 1
+            ), 0) AS pct
+        FROM sections sec
+        JOIN classes cl ON cl.id = sec.class_id
+        LEFT JOIN attendance a
+               ON a.section_id = sec.id
+              AND a.academic_year_id = :year_id
+              AND a.attendance_date  = :today
+        WHERE cl.branch_id = :branch_id
+          AND EXISTS (
+              SELECT 1 FROM student_enrollments se
+              WHERE se.section_id = sec.id
+                AND se.academic_year_id = :year_id
+                AND se.status = 'ACTIVE'
+          )
+        GROUP BY sec.id, sec.name, cl.id, cl.grade
+        ORDER BY cl.grade, sec.name
+    """), {"branch_id": effective_branch, "year_id": year_id, "today": today})).mappings().fetchall()
+
+    return [dict(r) for r in rows]

@@ -59,3 +59,63 @@ async def daily_attendance_report(
         db         = db,
     )
     return {"data": stats}
+
+
+@router.get("/attendance/weekly")
+async def weekly_attendance_trend(
+    branch_id: str | None = Query(default=None),
+    year_id:   str | None = Query(default=None),
+    current_user: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns attendance % for the last 7 school days — powers the TrendLine chart."""
+    from datetime import timedelta
+
+    effective_branch = branch_id or str(getattr(current_user, "branch_id", ""))
+    if not year_id:
+        row = (await db.execute(
+            text("SELECT id::text FROM academic_years WHERE is_current=TRUE LIMIT 1")
+        )).fetchone()
+        year_id = row[0] if row else None
+
+    today = date.today()
+    days = []
+    d = today
+    while len(days) < 7:
+        if d.weekday() < 6:   # Mon-Sat
+            days.append(d)
+        d -= timedelta(days=1)
+    days.reverse()
+
+    rows = (await db.execute(text("""
+        SELECT
+            a.attendance_date,
+            COUNT(*) FILTER (WHERE a.status IN ('PRESENT','LATE')) AS present,
+            COUNT(*) AS total
+        FROM attendance a
+        JOIN sections s ON s.id = a.section_id
+        JOIN classes  c ON c.id = s.class_id
+        WHERE c.branch_id = :branch_id
+          AND a.academic_year_id = :year_id
+          AND a.attendance_date = ANY(:days)
+        GROUP BY a.attendance_date
+        ORDER BY a.attendance_date
+    """), {
+        "branch_id": effective_branch,
+        "year_id": year_id,
+        "days": days,
+    })).mappings().fetchall()
+
+    by_date = {str(r["attendance_date"]): r for r in rows}
+    result = []
+    for d in days:
+        r = by_date.get(str(d))
+        pct = round(r["present"] / r["total"] * 100, 1) if r and r["total"] else 0
+        result.append({
+            "date": str(d),
+            "label": d.strftime("%a"),
+            "pct": pct,
+            "present": r["present"] if r else 0,
+            "total": r["total"] if r else 0,
+        })
+    return result
