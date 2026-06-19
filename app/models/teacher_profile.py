@@ -24,6 +24,7 @@ class TeacherProfile(Base):
                                          back_populates="teacher",
                                          cascade="all, delete-orphan")
     timetable_entries     = relationship("TimetableEntry", back_populates="teacher")
+    ptm_records                 = relationship("PTMRecord", back_populates="teacher")
 
     __table_args__ = (
         UniqueConstraint("user_id", name="uq_teacher_user_id"),

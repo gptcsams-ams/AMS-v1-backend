@@ -12,7 +12,7 @@ from app.routers import (
     parent_portal,
     academic_years, attendance, audit, auth, branding, branches,
     calendar, cameras, classes, detections, enrollments, leaves,
-    mobile, notifications, parents, reports, school, sections,
+    mobile, notifications, parents, ptm, reports, school, sections,
     students, subjects, teachers, timetable, websocket,
 )
 
@@ -40,7 +40,7 @@ for r, t in [
     (academic_years.router, "AcademicYears"), (classes.router, "Classes"), (sections.router, "Sections"), (subjects.router, "Subjects"),
     (students.router, "Students"), (enrollments.router, "Enrollments"), (teachers.router, "Teachers"), (parents.router, "Parents"),
     (timetable.router, "Timetable"), (attendance.router, "Attendance"), (cameras.router, "Cameras"), (detections.router, "Detections"),
-    (leaves.router, "Leaves"), (notifications.router, "Notifications"), (calendar.router, "Calendar"),
+    (ptm.router, "PTM"), (leaves.router, "Leaves"), (notifications.router, "Notifications"), (calendar.router, "Calendar"),
     (reports.router, "Reports"), (audit.router, "Audit"), (mobile.router, "Mobile"),(leaves.router, "Leaves"),
     (notifications.router, "Notifications"), (parent_portal.router, "Parent Portal")
 ]:

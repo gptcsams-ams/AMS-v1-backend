@@ -22,6 +22,7 @@ class Parent(Base):
     user            = relationship("User", back_populates="parent_profile")
     student_parents = relationship("StudentParent", back_populates="parent",
                                    cascade="all, delete-orphan")
+    ptm_records     = relationship("PTMRecord", back_populates="parent")
 
     __table_args__ = (
         UniqueConstraint("contact_number", name="uq_parent_contact"),

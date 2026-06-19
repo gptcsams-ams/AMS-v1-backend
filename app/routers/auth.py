@@ -11,6 +11,8 @@ from app.models.user import User
 from app.schemas.auth import (LoginRequest, LoginResponse, RefreshRequest,
     TOTPSetupResponse, ChangePasswordRequest)
 from app.services.audit_service import log_audit
+from datetime import date
+from uuid import UUID
 import secrets
 
 router = APIRouter()
@@ -66,13 +68,16 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db),
         )
         db.add(parent_profile)
         await db.flush()
+        await db.commit()  # persist user + parent profile so _issue_tokens gets a real UUID
 
+    # ── Normal credential check ────────────────────────────────────────────
     if not user or not verify_password(req.password, user.password):
         raise HTTPException(401, detail={"code": "INVALID_CREDENTIALS",
                                           "message": "Invalid email or password"})
     if not user.is_active:
         raise HTTPException(401, detail={"code": "ACCOUNT_DISABLED",
                                           "message": "Account is disabled"})
+
     # 2FA check
     if user.totp_enabled:
         partial = secrets.token_urlsafe(32)
@@ -95,6 +100,7 @@ async def verify_2fa(partial_token: str, code: str,
     await redis.delete(f"partial_auth:{partial_token}")
     return await _issue_tokens(user, db, redis)
 
+
 @router.post("/2fa/setup")
 async def setup_2fa(current_user: User = Depends(require_roles("SUPER_ADMIN", "ADMIN")),
                     db: AsyncSession = Depends(get_db)):
@@ -103,6 +109,7 @@ async def setup_2fa(current_user: User = Depends(require_roles("SUPER_ADMIN", "A
     await db.commit()
     uri = get_totp_uri(secret, current_user.email, "AMS")
     return {"qr_uri": uri, "secret": secret}
+
 
 @router.post("/2fa/confirm-setup")
 async def confirm_2fa(code: str,
@@ -114,6 +121,7 @@ async def confirm_2fa(code: str,
     await db.commit()
     return {"message": "2FA enabled"}
 
+
 @router.delete("/2fa/disable")
 async def disable_2fa(current_user: User = Depends(require_roles("SUPER_ADMIN")),
                       db: AsyncSession = Depends(get_db)):
@@ -121,6 +129,7 @@ async def disable_2fa(current_user: User = Depends(require_roles("SUPER_ADMIN"))
     current_user.totp_secret = None
     await db.commit()
     return {"message": "2FA disabled"}
+
 
 @router.post("/refresh")
 async def refresh(req: RefreshRequest, db: AsyncSession = Depends(get_db),
@@ -137,11 +146,13 @@ async def refresh(req: RefreshRequest, db: AsyncSession = Depends(get_db),
                                    "branch_id": str(user.branch_id)})
     return {"access_token": token, "token_type": "bearer"}
 
+
 @router.post("/logout")
 async def logout(access_token: str, refresh_token: str, redis = Depends(get_redis)):
     await redis.setex(f"blacklist:token:{access_token}", 900, "1")
     await redis.delete(f"refresh:{refresh_token}")
     return {"message": "Logged out"}
+
 
 @router.patch("/change-password")
 async def change_password(req: ChangePasswordRequest,
@@ -153,6 +164,7 @@ async def change_password(req: ChangePasswordRequest,
     current_user.password = hash_password(req.new_password)
     await db.commit()
     return {"message": "Password changed"}
+
 
 async def _issue_tokens(user: User, db: AsyncSession, redis) -> dict:
     access  = create_access_token({"sub": str(user.id), "role": user.role,
