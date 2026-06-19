@@ -1,36 +1,38 @@
-﻿from collections import defaultdict
-from statistics import mean
-from typing import Dict, List, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 
 
-def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
-    return float(1.0 - np.dot(a, b))
-
-
 def match_face(
-    query_embedding: np.ndarray,
-    embeddings: Dict[str, List[np.ndarray]],
-    threshold: float = 0.65,
-    skip_ids: set | None = None,
-) -> Tuple[Optional[str], Optional[float], str]:
-    if skip_ids is None:
-        skip_ids = set()
+    query_embedding: np.ndarray,   # shape (512,), L2-normalized
+    embeddings:      np.ndarray,   # shape (N, 512), L2-normalized
+    student_ids:     list,         # length N, same order as embeddings rows
+    threshold:       float = 0.65,
+) -> Tuple[Optional[str], float, str]:
+    """
+    Vectorized cosine similarity — single numpy matrix multiply.
+    O(N) not O(N*K). ~0.1ms for 1000 students on CPU.
 
-    votes = defaultdict(list)
-    for student_id, student_embs in embeddings.items():
-        if student_id in skip_ids:
-            continue
-        for emb in student_embs:
-            dist = cosine_distance(query_embedding, emb)
-            if dist < threshold:
-                votes[student_id].append(dist)
+    Returns (student_id, similarity_score, status).
+    status: MATCHED | LOW_CONFIDENCE | UNKNOWN
+    """
+    if len(student_ids) == 0 or embeddings.shape[0] == 0:
+        return None, 0.0, "UNKNOWN"
 
-    if not votes:
-        return None, None, "UNKNOWN"
+    norm = np.linalg.norm(query_embedding)
+    if norm > 0:
+        query_embedding = query_embedding / norm
 
-    winner = max(votes, key=lambda sid: (len(votes[sid]), -mean(votes[sid])))
-    avg_dist = mean(votes[winner])
-    status = "MATCHED" if len(votes[winner]) >= 2 else "LOW_CONFIDENCE"
-    return winner, avg_dist, status
+    # Single BLAS call — cosine similarity for every student at once
+    similarities = embeddings @ query_embedding  # shape (N,)
+
+    best_idx   = int(np.argmax(similarities))
+    best_score = float(similarities[best_idx])
+    best_id    = student_ids[best_idx]
+
+    if best_score >= threshold:
+        return best_id, best_score, "MATCHED"
+    elif best_score >= threshold - 0.10:
+        return best_id, best_score, "LOW_CONFIDENCE"
+    else:
+        return None, best_score, "UNKNOWN"

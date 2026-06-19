@@ -1,27 +1,14 @@
-﻿import redis.asyncio as aioredis
+# Redis has been removed. Stub kept so any missed import gives a clear error
+# rather than an AttributeError. Remove this file once all callers are gone.
 
-from app.core.config import settings
-
-
-redis_client: aioredis.Redis | None = None
-
-
-async def init_redis() -> None:
-    global redis_client
-    redis_client = aioredis.from_url(
-        settings.REDIS_URL,
-        encoding="utf-8",
-        decode_responses=True,
-        max_connections=50,
+def get_redis():
+    raise RuntimeError(
+        "Redis has been removed. "
+        "Use auth_token_store.py for token operations."
     )
 
+async def init_redis():
+    pass
 
-async def close_redis() -> None:
-    if redis_client:
-        await redis_client.aclose()
-
-
-def get_redis() -> aioredis.Redis:
-    if redis_client is None:
-        raise RuntimeError("Redis client is not initialized")
-    return redis_client
+async def close_redis():
+    pass

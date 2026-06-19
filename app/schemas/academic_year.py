@@ -30,3 +30,4 @@ class AcademicYearResponse(BaseModel):
     end_date: date
     is_current: bool
     created_at: datetime
+    enrollment_count: Optional[int] = None

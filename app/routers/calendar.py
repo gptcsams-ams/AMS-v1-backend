@@ -5,11 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import require_admin, require_super_admin
+from app.core.dependencies import require_admin
 from app.models.school_calendar import SchoolCalendar
 from app.schemas.calendar import CalendarCreate, CalendarUpdate
 
-router = APIRouter(prefix="/calendar")
+router = APIRouter()
 
 
 @router.get("")
@@ -37,7 +37,7 @@ async def update_calendar(entry_id: UUID, payload: CalendarUpdate, _: object = D
 
 
 @router.delete("/{entry_id}")
-async def delete_calendar(entry_id: UUID, _: object = Depends(require_super_admin), db: AsyncSession = Depends(get_db)):
+async def delete_calendar(entry_id: UUID, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     row = (await db.execute(select(SchoolCalendar).where(SchoolCalendar.id == entry_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Calendar entry not found")

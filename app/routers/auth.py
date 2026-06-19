@@ -155,9 +155,11 @@ async def logout(access_token: str, refresh_token: str, redis = Depends(get_redi
 
 
 @router.patch("/change-password")
-async def change_password(req: ChangePasswordRequest,
-                           current_user: User = Depends(get_current_user),
-                           db: AsyncSession = Depends(get_db)):
+async def change_password(
+    req: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     if not verify_password(req.current_password, current_user.password):
         raise HTTPException(400, detail={"code": "WRONG_PASSWORD",
                                           "message": "Current password incorrect"})

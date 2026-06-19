@@ -1,17 +1,17 @@
-﻿from uuid import UUID
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import require_admin, require_super_admin
+from app.core.dependencies import require_admin
 from app.models.parent import Parent
 from app.models.student_parent import StudentParent
 from app.schemas.common import MessageResponse
 from app.schemas.parent import ParentCreate, ParentResponse, ParentStudentLinkCreate, ParentUpdate
 
-router = APIRouter(prefix="/parents")
+router = APIRouter()
 
 
 @router.get("", response_model=list[ParentResponse])
@@ -59,7 +59,7 @@ async def update_parent(parent_id: UUID, payload: ParentUpdate, _: object = Depe
 
 
 @router.delete("/{parent_id}", response_model=MessageResponse)
-async def delete_parent(parent_id: UUID, _: object = Depends(require_super_admin), db: AsyncSession = Depends(get_db)):
+async def delete_parent(parent_id: UUID, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     row = (await db.execute(select(Parent).where(Parent.id == parent_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Parent not found")

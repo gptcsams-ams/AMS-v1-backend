@@ -41,6 +41,21 @@ class TimetableEntryUpdate(BaseModel):
     is_published: Optional[bool] = None
 
 
+class TimetableDayPeriod(BaseModel):
+    id: Optional[UUID] = None
+    period_number: int
+    start_time: time
+    end_time: time
+    slot_type: str = "CLASS"
+    subject_id: Optional[UUID] = None
+    teacher_profile_id: Optional[UUID] = None
+
+
+class TimetableDayUpsert(BaseModel):
+    academic_year_id: UUID
+    periods: list[TimetableDayPeriod]
+
+
 class AttendanceWindowCreate(BaseModel):
     section_id: UUID
     timetable_entry_id: Optional[UUID] = None

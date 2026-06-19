@@ -14,7 +14,8 @@ class Section(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     academic_class     = relationship("AcademicClass", back_populates="sections")
-    enrollments        = relationship("StudentEnrollment", back_populates="section")
+    enrollments        = relationship("StudentEnrollment", back_populates="section",
+                                      cascade="all, delete-orphan")
     attendance_windows = relationship("AttendanceWindow", back_populates="section",
                                       cascade="all, delete-orphan")
     attendance_records = relationship("Attendance", back_populates="section",
