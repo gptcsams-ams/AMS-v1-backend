@@ -16,6 +16,7 @@ from app.models.notification import Notification
 from app.models.notification_template import NotificationTemplate
 from app.models.parent import Parent
 from app.models.period_slot import PeriodSlot
+from app.models.ptm_record import PTMRecord
 from app.models.school import School
 from app.models.school_calendar import SchoolCalendar
 from app.models.section import Section
@@ -49,6 +50,7 @@ __all__ = [
     "NotificationTemplate",
     "Parent",
     "PeriodSlot",
+    "PTMRecord",
     "School",
     "SchoolCalendar",
     "Section",

@@ -9,7 +9,7 @@ from app.models.school import School
 from app.schemas.branding import BrandingResponse, BrandingUpdate
 from app.services.imagekit_service import upload_imagekit_file
 
-router = APIRouter()
+router = APIRouter(prefix="/branding")
 
 
 @router.get("", response_model=BrandingResponse)

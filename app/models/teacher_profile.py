@@ -26,6 +26,7 @@ class TeacherProfile(Base):
     timetable_entries           = relationship("TimetableEntry", back_populates="teacher")
     marked_classroom_attendance = relationship("ClassroomAttendanceRecord",
                                                back_populates="marked_by_teacher")
+    ptm_records                 = relationship("PTMRecord", back_populates="teacher")
 
     __table_args__ = (
         UniqueConstraint("user_id", name="uq_teacher_user_id"),
