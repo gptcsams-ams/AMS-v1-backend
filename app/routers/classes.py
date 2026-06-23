@@ -204,7 +204,23 @@ async def update_class(
         setattr(row, key, value)
     await db.commit()
     await db.refresh(row)
-    return row
+    section_count = (await db.execute(
+        select(func.count(Section.id)).where(Section.class_id == class_id)
+    )).scalar_one()
+    student_count = (await db.execute(
+        select(func.count(distinct(StudentEnrollment.student_id)))
+        .join(Section, Section.id == StudentEnrollment.section_id)
+        .where(Section.class_id == class_id)
+    )).scalar_one()
+    return {
+        "id": row.id,
+        "branch_id": row.branch_id,
+        "grade": row.grade,
+        "created_at": row.created_at,
+        "section_count": section_count,
+        "student_count": student_count,
+        "avg_attendance_pct": 0,
+    }
 
 
 @router.delete("/{class_id}", response_model=MessageResponse)

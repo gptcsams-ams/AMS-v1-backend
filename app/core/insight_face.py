@@ -28,7 +28,7 @@ def get_face_app() -> FaceAnalysis:
                     name=settings.INSIGHTFACE_MODEL,
                     providers=["CPUExecutionProvider"],
                 )
-                app.prepare(ctx_id=settings.INSIGHTFACE_CTX_ID, det_size=(640, 640))
+                app.prepare(ctx_id=settings.INSIGHTFACE_CTX_ID, det_size=(960, 960))
                 _app = app
                 logger.info("InsightFace model loaded.")
     return _app

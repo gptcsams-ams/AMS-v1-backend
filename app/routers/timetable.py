@@ -33,6 +33,71 @@ router = APIRouter()
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
 
+@router.get("/ongoing")
+async def get_ongoing_classes(
+    academic_year_id: UUID | None = Query(default=None),
+    _: object = Depends(require_any),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Return all timetable entries whose period slot covers the current local time today.
+    Used by the Live Attendance page to show which classes are happening right now.
+    """
+    from datetime import datetime
+    from sqlalchemy import text as sa_text
+
+    now        = datetime.now()
+    day_of_week = now.weekday()          # 0=Mon … 4=Fri
+    current_time = now.time()
+
+    # Resolve academic year if not provided
+    if academic_year_id is None:
+        row = (await db.execute(
+            sa_text("SELECT id FROM academic_years WHERE is_current = TRUE LIMIT 1")
+        )).fetchone()
+        if not row:
+            return []
+        academic_year_id = row[0]
+
+    rows = await db.execute(
+        select(
+            TimetableEntry,
+            PeriodSlot,
+            Section,
+            AcademicClass,
+            Subject,
+        )
+        .join(PeriodSlot,    PeriodSlot.id    == TimetableEntry.period_slot_id)
+        .join(Section,       Section.id       == PeriodSlot.section_id)
+        .join(AcademicClass, AcademicClass.id == Section.class_id)
+        .outerjoin(Subject,  Subject.id       == TimetableEntry.subject_id)
+        .where(
+            TimetableEntry.academic_year_id == academic_year_id,
+            TimetableEntry.is_published     == True,
+            PeriodSlot.day_of_week          == day_of_week,
+            PeriodSlot.start_time           <= current_time,
+            PeriodSlot.end_time             >= current_time,
+            PeriodSlot.slot_type            == "CLASS",
+        )
+        .order_by(AcademicClass.grade, Section.name)
+    )
+
+    result = []
+    for entry, slot, section, cls, subject in rows.all():
+        result.append({
+            "entry_id":    str(entry.id),
+            "section_id":  str(section.id),
+            "section_name": section.name,
+            "grade":       cls.grade,
+            "subject_name": subject.name  if subject else None,
+            "subject_color": subject.color if subject else None,
+            "start_time":  slot.start_time.strftime("%H:%M"),
+            "end_time":    slot.end_time.strftime("%H:%M"),
+            "day_of_week": slot.day_of_week,
+        })
+    return result
+
+
 def _entry_payload(entry: TimetableEntry) -> dict:
     slot = entry.period_slot
     teacher_user = entry.teacher.user if entry.teacher and entry.teacher.user else None

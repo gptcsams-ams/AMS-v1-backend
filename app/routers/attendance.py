@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time
 from uuid import UUID
 
@@ -6,6 +10,8 @@ import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+_executor = ThreadPoolExecutor(max_workers=2)
 
 from app.core.database import get_db
 from app.core.dependencies import require_admin, require_any
@@ -58,6 +64,68 @@ def _cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
     if left_norm == 0 or right_norm == 0:
         return 0.0
     return float(np.dot(left, right) / (left_norm * right_norm))
+
+
+def _decode_image(content: bytes) -> np.ndarray:
+    """Decode image bytes → BGR ndarray. Raises ValueError on failure."""
+    buf = np.frombuffer(content, dtype=np.uint8)
+    img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Invalid image")
+    return img
+
+
+def _run_detection(img: np.ndarray):
+    """Run InsightFace detection in the calling thread (use with executor)."""
+    return get_face_app().get(img)
+
+
+def _build_embedding_matrix(enrolled: list) -> tuple[np.ndarray, list]:
+    """
+    Pre-normalise all stored embeddings into a (N, D) matrix for fast batch cosine.
+    Returns (matrix, parallel list of (student, face) tuples).
+    """
+    vecs, pairs = [], []
+    for student, face in enrolled:
+        if face.embedding is None:
+            continue
+        # pgvector may return a custom type — convert explicitly to list first
+        raw = face.embedding
+        if hasattr(raw, 'tolist'):
+            raw = raw.tolist()
+        v = np.array(raw, dtype=np.float32)
+        if v.ndim != 1 or v.shape[0] == 0:
+            continue
+        n = np.linalg.norm(v)
+        if n > 0:
+            v = v / n
+        vecs.append(v)
+        pairs.append((student, face))
+    if not vecs:
+        return np.empty((0,), dtype=np.float32), []
+    return np.stack(vecs), pairs
+
+
+def _match_face(detected_embedding: np.ndarray, emb_matrix: np.ndarray,
+                pairs: list, threshold: float, exclude_ids: set):
+    """Vectorised cosine match. Returns (student, face, score) or (None, None, 0)."""
+    if emb_matrix.shape[0] == 0:
+        return None, None, 0.0
+    norm = np.linalg.norm(detected_embedding)
+    if norm == 0:
+        return None, None, 0.0
+    q = detected_embedding / norm
+    scores = emb_matrix @ q          # (N,) — fast dot product
+    # Mask already-matched students to avoid double-assigning the same student
+    for idx, (student, _) in enumerate(pairs):
+        if student.id in exclude_ids:
+            scores[idx] = -1.0
+    best_idx = int(np.argmax(scores))
+    best_score = float(scores[best_idx])
+    if best_score < threshold:
+        return None, None, best_score
+    student, face = pairs[best_idx]
+    return student, face, best_score
 
 
 @router.get("/attendance-windows")
@@ -170,6 +238,31 @@ async def _query_attendance(
     return [dict(r) for r in rows.mappings().fetchall()]
 
 
+@router.get("/attendance/today-raw")
+async def today_raw(
+    section_id: UUID = Query(...),
+    _: object = Depends(require_any),
+    db: AsyncSession = Depends(get_db),
+):
+    """Dead-simple: return every attendance row for this section today, no joins."""
+    rows = await db.execute(text("""
+        SELECT
+            a.id::text            AS id,
+            a.student_id::text    AS student_id,
+            a.section_id::text    AS section_id,
+            a.attendance_date::text,
+            a.status,
+            a.is_overridden,
+            s.first_name || ' ' || s.last_name AS student_name
+        FROM attendance a
+        JOIN students s ON s.id = a.student_id
+        WHERE a.section_id = :sid
+          AND a.attendance_date = CURRENT_DATE
+        ORDER BY a.status DESC
+    """), {"sid": str(section_id)})
+    return [dict(r) for r in rows.mappings().fetchall()]
+
+
 @router.get("/attendance")
 async def list_attendance(
     section_id:       UUID | None = Query(default=None),
@@ -240,12 +333,14 @@ async def detect_faces(
     if not content:
         raise HTTPException(status_code=400, detail="Empty image")
 
-    buffer = np.frombuffer(content, dtype=np.uint8)
-    img = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
-    if img is None:
+    try:
+        img = _decode_image(content)
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid image")
 
-    faces = get_face_app().get(img)
+    loop = asyncio.get_event_loop()
+    faces = await loop.run_in_executor(_executor, _run_detection, img)
+
     result = []
     for face in faces:
         bbox = face.bbox.astype(int)
@@ -325,12 +420,16 @@ async def identify_face(
     }
 
 
+import logging as _logging
+_scan_log = _logging.getLogger("attendance.scan")
+
+
 @router.post("/attendance/scan-frame")
 async def scan_frame(
     section_id: UUID = Form(...),
     academic_year_id: UUID = Form(...),
     image: UploadFile = File(...),
-    threshold: float = Form(default=0.42),
+    threshold: float = Form(default=0.30),
     attendance_window_id: UUID | None = Form(default=None),
     _: object = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -339,12 +438,16 @@ async def scan_frame(
     if not content:
         raise HTTPException(status_code=400, detail="Empty image")
 
-    buffer = np.frombuffer(content, dtype=np.uint8)
-    img = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
-    if img is None:
+    try:
+        img = _decode_image(content)
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid image")
 
-    detected_faces = get_face_app().get(img)
+    # Run detection + DB query concurrently
+    loop = asyncio.get_event_loop()
+    detected_faces_task = loop.run_in_executor(_executor, _run_detection, img)
+
+    # Fetch all enrolled students with face embeddings for this section
     enrolled_rows = await db.execute(
         select(Student, StudentFace)
         .join(StudentEnrollment, StudentEnrollment.student_id == Student.id)
@@ -352,27 +455,42 @@ async def scan_frame(
         .where(
             StudentEnrollment.section_id == section_id,
             StudentEnrollment.academic_year_id == academic_year_id,
-            Student.is_active == True,
             StudentFace.is_active == True,
         )
     )
     enrolled = list(enrolled_rows.all())
+    detected_faces = await detected_faces_task
+
+    _scan_log.info(
+        "scan_frame: section=%s year=%s detected_faces=%d enrolled_faces=%d threshold=%.2f",
+        section_id, academic_year_id, len(detected_faces), len(enrolled), threshold,
+    )
+
+    if not enrolled:
+        _scan_log.warning("scan_frame: NO enrolled face embeddings found for section %s / year %s", section_id, academic_year_id)
+
+    # Pre-build normalised embedding matrix for fast vectorised matching
+    emb_matrix, pairs = _build_embedding_matrix(enrolled)
 
     matches = []
     marked_ids: set[UUID] = set()
     now = datetime.utcnow()
     today = date.today()
 
-    # Resolve window once — avoids repeated DB hits inside the face loop
     resolved_window_id: UUID | None = attendance_window_id
     if resolved_window_id is None and len(detected_faces) > 0:
         resolved_window_id = (await _get_or_create_manual_window(db, section_id)).id
 
     for detected in detected_faces:
-        detected_embedding = np.asarray(detected.embedding, dtype=np.float32)
-        detected_norm = np.linalg.norm(detected_embedding)
-        if detected_norm > 0:
-            detected_embedding = detected_embedding / detected_norm
+        # Skip faces where recognition model didn't produce an embedding
+        if detected.embedding is None:
+            _scan_log.warning("scan_frame: detected face has no embedding (det_score=%.3f)", float(detected.det_score))
+            continue
+
+        raw_emb = detected.embedding
+        if hasattr(raw_emb, 'tolist'):
+            raw_emb = raw_emb.tolist()
+        detected_embedding = np.array(raw_emb, dtype=np.float32)
 
         bbox_arr = detected.bbox.astype(int)
         face_bbox = {
@@ -382,27 +500,25 @@ async def scan_frame(
             "h": int(bbox_arr[3] - bbox_arr[1]),
         }
 
-        best_student: Student | None = None
-        best_face: StudentFace | None = None
-        best_score = 0.0
+        best_student, best_face, best_score = _match_face(
+            detected_embedding, emb_matrix, pairs, threshold, marked_ids
+        )
+        matched = best_student is not None
 
-        for student, face in enrolled:
-            if face.embedding is None:
-                continue
-            score = _cosine_similarity(detected_embedding, np.asarray(face.embedding, dtype=np.float32))
-            if score > best_score:
-                best_score = score
-                best_student = student
-                best_face = face
+        _scan_log.info(
+            "scan_frame: face det_score=%.3f best_match_score=%.4f matched=%s student=%s",
+            float(detected.det_score), best_score, matched,
+            best_student.first_name if best_student else "none",
+        )
 
-        matched = bool(best_student and best_face and best_score >= threshold)
-        item = {
+        item: dict = {
             "matched": matched,
             "confidence": round(best_score, 4),
             "threshold": threshold,
             "face_bbox": face_bbox,
             "detection_score": round(float(detected.det_score), 4),
         }
+
         if matched and best_student and best_face:
             item["student"] = {
                 "id": str(best_student.id),
@@ -431,9 +547,10 @@ async def scan_frame(
 
     return {
         "faces_detected": len(detected_faces),
-        "matched_count": len([item for item in matches if item["matched"]]),
+        "matched_count": len([m for m in matches if m["matched"]]),
         "attendance_marked_count": len(marked_ids),
         "threshold": threshold,
+        "enrolled_count": len(pairs),
         "matches": matches,
     }
 

@@ -47,12 +47,7 @@ async def get_class_sections_with_stats(
                 / NULLIF(COALESCE(month_att.total_month, 0), 0)
                 * 100, 1
             )                                                        AS month_avg_pct,
-            COUNT(DISTINCT se.student_id)
-                FILTER (WHERE
-                    COALESCE(all_att.total_all, 0) > 0
-                    AND COALESCE(all_att.present_all, 0)::float
-                        / all_att.total_all < 0.75
-                )                                                    AS defaulter_count
+            COALESCE(def_sub.defaulter_count, 0)                    AS defaulter_count
 
         FROM sections sec
         JOIN classes c ON c.id = sec.class_id
@@ -88,19 +83,30 @@ async def get_class_sections_with_stats(
         ) month_att ON TRUE
 
         LEFT JOIN LATERAL (
-            SELECT
-                COUNT(*) FILTER (WHERE status IN ('PRESENT','LATE')) AS present_all,
-                COUNT(*)                                               AS total_all
-            FROM attendance a3
-            WHERE a3.student_id = se.student_id
-              AND a3.academic_year_id = CAST(:year_id AS uuid)
-        ) all_att ON TRUE
+            SELECT COUNT(*) AS defaulter_count
+            FROM student_enrollments se2
+            WHERE se2.section_id = sec.id
+              AND se2.academic_year_id = CAST(:year_id AS uuid)
+              AND se2.status = 'ACTIVE'
+              AND (
+                SELECT COUNT(*) FROM attendance ax
+                WHERE ax.student_id = se2.student_id
+                  AND ax.academic_year_id = CAST(:year_id AS uuid)
+              ) > 0
+              AND (
+                SELECT COUNT(*) FILTER (WHERE ax2.status IN ('PRESENT','LATE'))::float
+                       / NULLIF(COUNT(*), 0)
+                FROM attendance ax2
+                WHERE ax2.student_id = se2.student_id
+                  AND ax2.academic_year_id = CAST(:year_id AS uuid)
+              ) < 0.75
+        ) def_sub ON TRUE
 
         WHERE c.id = :class_id
         GROUP BY sec.id, sec.class_id, sec.name, c.grade,
                  today.present_today, today.total_today,
                  month_att.present_month, month_att.total_month,
-                 all_att.present_all, all_att.total_all
+                 def_sub.defaulter_count
         ORDER BY sec.name
     """), {"class_id": class_id, "year_id": year_id})
 
