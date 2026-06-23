@@ -35,6 +35,9 @@ class Student(Base):
     detections         = relationship("Detection", back_populates="student")
     student_parents    = relationship("StudentParent", back_populates="student",
                                       cascade="all, delete-orphan")
+    classroom_attendance_records = relationship("ClassroomAttendanceRecord",
+                                                back_populates="student",
+                                                cascade="all, delete-orphan")
     ptm_records = relationship("PTMRecord", back_populates="student",
                                cascade="all, delete-orphan")
 

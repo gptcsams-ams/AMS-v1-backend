@@ -15,6 +15,7 @@ from app.routers import (
     mobile, notifications, parents, ptm, reports, school, sections,
     students, subjects, teachers, timetable, websocket,
 )
+import logging
 
 PREFIX = "/api/v1"
 log    = logging.getLogger("startup")

@@ -23,7 +23,9 @@ class TeacherProfile(Base):
     subject_eligibilities = relationship("TeacherSubjectEligibility",
                                          back_populates="teacher",
                                          cascade="all, delete-orphan")
-    timetable_entries     = relationship("TimetableEntry", back_populates="teacher")
+    timetable_entries           = relationship("TimetableEntry", back_populates="teacher")
+    marked_classroom_attendance = relationship("ClassroomAttendanceRecord",
+                                               back_populates="marked_by_teacher")
     ptm_records                 = relationship("PTMRecord", back_populates="teacher")
 
     __table_args__ = (
