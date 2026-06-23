@@ -1,7 +1,8 @@
-﻿from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+"""WebSocket endpoints — /ws/*"""
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.core.security import decode_access_token
-from app.core.redis import get_redis
-import asyncio, logging
+from app.ws.connection_manager import notification_manager
+import logging
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -9,69 +10,56 @@ log = logging.getLogger(__name__)
 
 @router.websocket("/attendance/{section_id}")
 async def attendance_ws(websocket: WebSocket, section_id: str, token: str):
+    """Real-time attendance detection events for a section."""
     payload = decode_access_token(token)
     if not payload:
         await websocket.close(code=4001, reason="Unauthorized")
         return
-    await websocket.accept()
-
-    redis = get_redis()
-    pubsub = redis.pubsub()
-    channel = f"attendance:section:{section_id}"
-    await pubsub.subscribe(channel)
-    log.info(f"WS client subscribed to {channel}")
-
+    # Use a virtual user_id keyed by section for the attendance stream
+    virtual_id = f"section:{section_id}"
+    await notification_manager.connect(virtual_id, websocket)
     try:
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                await websocket.send_text(message["data"])
+        while True:
+            # Keep connection alive; events are pushed server-side
+            await websocket.receive_text()
     except WebSocketDisconnect:
         pass
     except Exception as e:
-        log.warning(f"WS error: {e}")
+        log.warning("attendance WS error section=%s: %s", section_id, e)
     finally:
-        await pubsub.unsubscribe(channel)
+        notification_manager.disconnect(virtual_id, websocket)
 
 
 @router.websocket("/cameras/health")
 async def cameras_health_ws(websocket: WebSocket, token: str):
+    """Real-time camera health status stream."""
     payload = decode_access_token(token)
     if not payload or payload.get("role") not in ("SUPER_ADMIN", "ADMIN"):
         await websocket.close(code=4001)
         return
-    await websocket.accept()
-
-    redis = get_redis()
-    pubsub = redis.pubsub()
-    await pubsub.psubscribe("camera:health:*")
-
+    virtual_id = f"cameras:health:{payload.get('sub')}"
+    await notification_manager.connect(virtual_id, websocket)
     try:
-        async for message in pubsub.listen():
-            if message["type"] == "pmessage":
-                await websocket.send_text(message["data"])
+        while True:
+            await websocket.receive_text()
     except WebSocketDisconnect:
         pass
     finally:
-        await pubsub.punsubscribe("camera:health:*")
+        notification_manager.disconnect(virtual_id, websocket)
 
 
 @router.websocket("/notifications/{user_id}")
 async def notifications_ws(websocket: WebSocket, user_id: str, token: str):
+    """Real-time notification push for a user (parent/admin)."""
     payload = decode_access_token(token)
     if not payload or payload.get("sub") != user_id:
         await websocket.close(code=4001)
         return
-    await websocket.accept()
-
-    redis = get_redis()
-    pubsub = redis.pubsub()
-    await pubsub.subscribe(f"notifications:user:{user_id}")
-
+    await notification_manager.connect(user_id, websocket)
     try:
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                await websocket.send_text(message["data"])
+        while True:
+            await websocket.receive_text()
     except WebSocketDisconnect:
         pass
     finally:
-        await pubsub.unsubscribe(f"notifications:user:{user_id}")
+        notification_manager.disconnect(user_id, websocket)

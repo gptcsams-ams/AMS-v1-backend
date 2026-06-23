@@ -13,7 +13,7 @@ from app.routers import (
     academic_years, attendance, audit, auth, branding, branches,
     calendar, cameras, classes, classroom_attendance, detections, enrollments, leaves,
     mobile, notifications, parents, reports, school, sections,
-    students, subjects, teachers, timetable, websocket,
+    students, subjects, teachers, timetable, webhooks, websocket,
 )
 
 PREFIX = "/api/v1"
@@ -75,6 +75,7 @@ app.include_router(calendar.router,       prefix=f"{PREFIX}/calendar",        ta
 app.include_router(reports.router,        prefix=f"{PREFIX}/reports",         tags=["Reports"])
 app.include_router(audit.router,          prefix=f"{PREFIX}/audit",           tags=["Audit"])
 app.include_router(mobile.router,         prefix=f"{PREFIX}/mobile",          tags=["Mobile"])
+app.include_router(webhooks.router,                                             tags=["Webhooks"])
 app.include_router(websocket.router,      prefix="/ws",                        tags=["WebSocket"])
 
 

@@ -12,8 +12,7 @@ from app.models.camera_health_log import CameraHealthLog
 from app.models.classroom import Classroom
 from app.models.detection import Detection
 from app.models.leave_request import LeaveRequest
-from app.models.notification import Notification
-from app.models.notification_template import NotificationTemplate
+from app.models.notification import Notification, NotificationTemplate, NotificationRule
 from app.models.parent import Parent
 from app.models.period_slot import PeriodSlot
 from app.models.school import School
@@ -47,6 +46,7 @@ __all__ = [
     "LeaveRequest",
     "Notification",
     "NotificationTemplate",
+    "NotificationRule",
     "Parent",
     "PeriodSlot",
     "School",

@@ -38,9 +38,15 @@ class Settings(BaseSettings):
 
     MSG91_API_KEY: Optional[str] = None
     MSG91_SENDER_ID: Optional[str] = None
+    MSG91_FLOW_ID: Optional[str] = None
 
     SENDGRID_API_KEY: Optional[str] = None
-    EMAIL_FROM: Optional[str] = None
+    SENDGRID_FROM_EMAIL: Optional[str] = None
+    SENDGRID_WEBHOOK_PUB_KEY: Optional[str] = None
+    EMAIL_FROM: Optional[str] = None  # alias kept for backward compat
+
+    DEFAULT_ATTENDANCE_THRESHOLD: float = 75.0
+    NOTIFICATION_THROTTLE_DEFAULT_MIN: int = 60
 
     RATE_LIMIT_PER_MINUTE: int = 120
     ALLOWED_ORIGINS: str = "*"
