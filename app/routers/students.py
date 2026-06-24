@@ -374,6 +374,22 @@ async def update_student(
     academic_year_id = data.pop("academic_year_id", None)
     roll_number = data.pop("roll_number", None)
 
+    # Admission number must stay globally unique (across all classes/branches).
+    # Block changing it to one already used by a DIFFERENT student.
+    new_admission = data.get("admission_number")
+    if new_admission and new_admission != row.admission_number:
+        clash = (await db.execute(
+            select(Student).where(
+                Student.admission_number == new_admission,
+                Student.id != student_id,
+            )
+        )).scalar_one_or_none()
+        if clash:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Admission number '{new_admission}' already exists. Use a unique admission number.",
+            )
+
     # Update core student fields
     for key, value in data.items():
         setattr(row, key, value)
@@ -452,7 +468,16 @@ async def update_student(
 
     # Case 3: No enrollment fields → only student core fields updated above
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if "uq_student_admission" in str(exc.orig) or "admission" in str(exc.orig).lower():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Admission number '{new_admission or row.admission_number}' already exists. Use a unique admission number.",
+            )
+        raise HTTPException(status_code=400, detail="Could not update student. Please check the submitted values.")
     await db.refresh(row)
     return (await _with_face_summary(db, [row]))[0]
 

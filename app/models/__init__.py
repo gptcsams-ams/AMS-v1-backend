@@ -15,6 +15,7 @@ from app.models.leave_request import LeaveRequest
 from app.models.notification import Notification, NotificationTemplate, NotificationRule
 from app.models.parent import Parent
 from app.models.period_slot import PeriodSlot
+from app.models.ptm_record import PTMRecord
 from app.models.school import School
 from app.models.school_calendar import SchoolCalendar
 from app.models.section import Section
@@ -49,6 +50,7 @@ __all__ = [
     "NotificationRule",
     "Parent",
     "PeriodSlot",
+    "PTMRecord",
     "School",
     "SchoolCalendar",
     "Section",

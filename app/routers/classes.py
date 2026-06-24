@@ -29,6 +29,7 @@ router = APIRouter()
 
 @router.get("", response_model=list[ClassResponse])
 async def list_classes(
+    branch_id: UUID | None = Query(None),
     year_id: UUID | None = Query(None),
     include_sections: bool = Query(False),
     _: object = Depends(require_any),
@@ -42,6 +43,8 @@ async def list_classes(
         )
         .outerjoin(Section, Section.class_id == AcademicClass.id)
     )
+    if branch_id:
+        query = query.where(AcademicClass.branch_id == branch_id)
     if year_id:
         query = query.outerjoin(
             StudentEnrollment,
@@ -187,7 +190,16 @@ async def create_class(
     db.add(row)
     await db.commit()
     await db.refresh(row)
-    return row
+    return {
+        "id":         row.id,
+        "branch_id":  row.branch_id,
+        "grade":      row.grade,
+        "created_at": row.created_at,
+        "section_count": 0,
+        "student_count": 0,
+        "avg_attendance_pct": None,
+        "sections": [],
+    }
 
 
 @router.patch("/{class_id}", response_model=ClassResponse)

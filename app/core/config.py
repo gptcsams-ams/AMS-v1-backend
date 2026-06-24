@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     DEFAULT_ATTENDANCE_THRESHOLD: float = 75.0
     NOTIFICATION_THROTTLE_DEFAULT_MIN: int = 60
 
+    # Parent Portal — base URL used to build {{portal_link}} in notifications.
+    PARENT_PORTAL_BASE_URL: str = "https://ams.school.com"
+
     RATE_LIMIT_PER_MINUTE: int = 120
     ALLOWED_ORIGINS: str = "*"
 

@@ -89,6 +89,15 @@ class NotificationService:
         if not tpl:
             raise TemplateNotFoundError(trigger_type, channel)
 
+        # 3b. Inject Parent Portal deep-link variable ({{portal_link}}). Routes the
+        #     parent straight to the relevant child's attendance view.
+        if student_id and "portal_link" not in variables:
+            variables = {
+                **variables,
+                "portal_link": self._build_portal_link(student_id),
+                "student_id": str(student_id),
+            }
+
         # 4. Render
         body    = self._render(tpl.body, variables)
         subject = self._render(tpl.subject, variables) if tpl.subject else None
@@ -393,6 +402,13 @@ class NotificationService:
                 )
             )).scalar_one_or_none()
         return tpl
+
+    @staticmethod
+    def _build_portal_link(student_id: UUID) -> str:
+        """Deep-link into the Parent Portal scoped to a specific child."""
+        from app.core.config import settings
+        base = settings.PARENT_PORTAL_BASE_URL.rstrip("/")
+        return f"{base}/parent/attendance?child={student_id}"
 
     @staticmethod
     def _render(template: str, variables: dict[str, str]) -> str:

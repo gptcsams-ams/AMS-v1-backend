@@ -12,7 +12,7 @@ from app.routers import (
     parent_portal,
     academic_years, attendance, audit, auth, branding, branches,
     calendar, cameras, classes, classroom_attendance, detections, enrollments, leaves,
-    mobile, notifications, parents, reports, school, sections,
+    mobile, notifications, parents, ptm, reports, school, sections,
     students, subjects, teachers, timetable, webhooks, websocket,
 )
 
@@ -51,32 +51,33 @@ app.add_middleware(
 app.add_middleware(AuditMiddleware)
 app.add_middleware(IfModifiedSinceMiddleware)
 
-# Auth — must come before the generic PREFIX includes
-app.include_router(auth.router,           prefix=f"{PREFIX}/auth",           tags=["Auth"])
-app.include_router(branding.router,       prefix=f"{PREFIX}/branding",        tags=["Branding"])
-app.include_router(school.router,         prefix=f"{PREFIX}/school",          tags=["School"])
-app.include_router(branches.router,       prefix=f"{PREFIX}/branches",        tags=["Branches"])
-app.include_router(academic_years.router, prefix=f"{PREFIX}/academic-years",  tags=["AcademicYears"])
-app.include_router(classes.router,        prefix=f"{PREFIX}/classes",         tags=["Classes"])
-app.include_router(sections.router,       prefix=f"{PREFIX}/sections",        tags=["Sections"])
-app.include_router(subjects.router,       prefix=f"{PREFIX}/subjects",        tags=["Subjects"])
-app.include_router(students.router,       prefix=f"{PREFIX}/students",        tags=["Students"])
-app.include_router(enrollments.router,    prefix=f"{PREFIX}/enrollments",     tags=["Enrollments"])
-app.include_router(teachers.router,       prefix=f"{PREFIX}/teachers",        tags=["Teachers"])
-app.include_router(parents.router,        prefix=f"{PREFIX}/parents",         tags=["Parents"])
-app.include_router(timetable.router,           prefix=f"{PREFIX}/timetable",            tags=["Timetable"])
-app.include_router(classroom_attendance.router, prefix=f"{PREFIX}/classroom-attendance", tags=["ClassroomAttendance"])
-app.include_router(attendance.router,     prefix=f"{PREFIX}",                 tags=["Attendance"])
-app.include_router(cameras.router,        prefix=f"{PREFIX}/cameras",         tags=["Cameras"])
-app.include_router(detections.router,     prefix=f"{PREFIX}/detections",      tags=["Detections"])
-app.include_router(leaves.router,         prefix=f"{PREFIX}/leaves",          tags=["Leaves"])
-app.include_router(notifications.router,  prefix=f"{PREFIX}/notifications",   tags=["Notifications"])
-app.include_router(calendar.router,       prefix=f"{PREFIX}/calendar",        tags=["Calendar"])
-app.include_router(reports.router,        prefix=f"{PREFIX}/reports",         tags=["Reports"])
-app.include_router(audit.router,          prefix=f"{PREFIX}/audit",           tags=["Audit"])
-app.include_router(mobile.router,         prefix=f"{PREFIX}/mobile",          tags=["Mobile"])
-app.include_router(webhooks.router,                                             tags=["Webhooks"])
-app.include_router(websocket.router,      prefix="/ws",                        tags=["WebSocket"])
+app.include_router(auth.router,                prefix=f"{PREFIX}/auth",                   tags=["Auth"])
+app.include_router(branding.router,            prefix=f"{PREFIX}/branding",               tags=["Branding"])
+app.include_router(school.router,              prefix=f"{PREFIX}/school",                 tags=["School"])
+app.include_router(branches.router,            prefix=f"{PREFIX}/branches",               tags=["Branches"])
+app.include_router(academic_years.router,      prefix=f"{PREFIX}/academic-years",         tags=["AcademicYears"])
+app.include_router(classes.router,             prefix=f"{PREFIX}/classes",                tags=["Classes"])
+app.include_router(sections.router,            prefix=f"{PREFIX}/sections",               tags=["Sections"])
+app.include_router(subjects.router,            prefix=f"{PREFIX}/subjects",               tags=["Subjects"])
+app.include_router(students.router,            prefix=f"{PREFIX}/students",               tags=["Students"])
+app.include_router(enrollments.router,         prefix=f"{PREFIX}/enrollments",            tags=["Enrollments"])
+app.include_router(teachers.router,            prefix=f"{PREFIX}/teachers",               tags=["Teachers"])
+app.include_router(parents.router,             prefix=f"{PREFIX}/parents",                tags=["Parents"])
+app.include_router(timetable.router,           prefix=f"{PREFIX}/timetable",              tags=["Timetable"])
+app.include_router(classroom_attendance.router, prefix=f"{PREFIX}/classroom-attendance",  tags=["ClassroomAttendance"])
+app.include_router(attendance.router,          prefix=f"{PREFIX}",                        tags=["Attendance"])
+app.include_router(cameras.router,             prefix=f"{PREFIX}/cameras",                tags=["Cameras"])
+app.include_router(detections.router,          prefix=f"{PREFIX}/detections",             tags=["Detections"])
+app.include_router(ptm.router,                 prefix=f"{PREFIX}/ptm",                    tags=["PTM"])
+app.include_router(leaves.router,              prefix=f"{PREFIX}/leaves",                 tags=["Leaves"])
+app.include_router(notifications.router,       prefix=f"{PREFIX}/notifications",          tags=["Notifications"])
+app.include_router(calendar.router,            prefix=f"{PREFIX}/calendar",               tags=["Calendar"])
+app.include_router(reports.router,             prefix=f"{PREFIX}/reports",                tags=["Reports"])
+app.include_router(audit.router,               prefix=f"{PREFIX}/audit",                  tags=["Audit"])
+app.include_router(mobile.router,              prefix=f"{PREFIX}/mobile",                 tags=["Mobile"])
+app.include_router(parent_portal.router,       prefix=f"{PREFIX}/parent-portal",          tags=["ParentPortal"])
+app.include_router(webhooks.router,                                                        tags=["Webhooks"])
+app.include_router(websocket.router,           prefix="/ws",                              tags=["WebSocket"])
 
 
 @app.get("/health")

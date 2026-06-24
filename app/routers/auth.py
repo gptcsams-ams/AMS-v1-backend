@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.sql import func
@@ -16,7 +16,7 @@ from app.core.auth_token_store import (
 )
 from app.models.user import User
 from app.schemas.auth import (LoginRequest, LoginResponse, RefreshRequest,
-    TOTPSetupResponse, ChangePasswordRequest, RegisterRequest)
+    TOTPSetupResponse, ChangePasswordRequest)
 from app.services.audit_service import log_audit
 from datetime import date
 from uuid import UUID
@@ -24,41 +24,20 @@ from uuid import UUID
 router = APIRouter()
 
 
-@router.post("/register")
-async def register(
-    req: RegisterRequest,
-    db: AsyncSession = Depends(get_db),
-):
+async def _ensure_default_context(db: AsyncSession, current_user=None) -> dict:
     from app.models.academic_year import AcademicYear
     from app.models.branch import Branch
     from app.models.school import School
 
-    role = req.role.upper()
-    if role not in {"ADMIN", "TEACHER", "PARENT"}:
-        raise HTTPException(status_code=400, detail="Invalid account type")
-
-    existing = (await db.execute(select(User).where(User.email == req.email))).scalar_one_or_none()
-    if existing:
-        raise HTTPException(status_code=409, detail="An account with this email already exists")
-
     school = (await db.execute(select(School).limit(1))).scalar_one_or_none()
     if not school:
-        school = School(
-            name="St. Mary's Higher Secondary School",
-            city="",
-            state="",
-            board="STATE",
-        )
+        school = School(name="St. Mary's Higher Secondary School", city="", state="", board="STATE")
         db.add(school)
         await db.flush()
 
     branch = (await db.execute(select(Branch).where(Branch.school_id == school.id).limit(1))).scalar_one_or_none()
     if not branch:
-        branch = Branch(
-            school_id=school.id,
-            name="Main Branch",
-            location="Main Campus",
-        )
+        branch = Branch(school_id=school.id, name="Main Branch", location="Main Campus")
         db.add(branch)
         await db.flush()
 
@@ -69,41 +48,34 @@ async def register(
     )).scalar_one_or_none()
     if not year:
         year = AcademicYear(
-            school_id=school.id,
-            name="2024-25",
-            start_date=date(2024, 6, 1),
-            end_date=date(2025, 5, 31),
-            is_current=True,
+            school_id=school.id, name="2024-25",
+            start_date=date(2024, 6, 1), end_date=date(2025, 5, 31), is_current=True,
         )
         db.add(year)
         await db.flush()
 
-    user = User(
-        name=req.name.strip(),
-        email=req.email,
-        password=hash_password(req.password),
-        role=role,
-        branch_id=branch.id,
-        is_active=True,
-        totp_enabled=False,
-    )
-    db.add(user)
-    await db.flush()
+    if current_user and not current_user.branch_id and current_user.role == "ADMIN":
+        current_user.branch_id = branch.id
 
-    tokens = await _issue_tokens(user, db)
     return {
-        **tokens,
-        "context": {
-            "school": {"id": str(school.id), "name": school.name},
-            "branch": {"id": str(branch.id), "name": branch.name, "school_id": str(branch.school_id)},
-            "academic_year": {"id": str(year.id), "name": year.name, "is_current": year.is_current},
+        "school": {"id": str(school.id), "name": school.name},
+        "branch": {"id": str(branch.id), "name": branch.name, "school_id": str(branch.school_id)},
+        "academic_year": {"id": str(year.id), "name": year.name, "is_current": year.is_current},
+        "user": {
+            "id": str(current_user.id) if current_user else "",
+            "name": current_user.name if current_user else "",
+            "email": current_user.email if current_user else "",
+            "role": current_user.role if current_user else "ADMIN",
+            "branch_id": str(current_user.branch_id) if current_user and current_user.branch_id else str(branch.id),
         },
     }
+
 
 @router.post("/login")
 async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == req.email))
     user = result.scalar_one_or_none()
+
     if (
         not user
         and req.email == "admin@gptcs.com"
@@ -122,8 +94,6 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         db.add(user)
         await db.flush()
 
-
-    # ── Auto-create Parent demo account ───────────────────────────────────
     if (
         not user
         and req.email == "parent@gptcs.com"
@@ -150,6 +120,7 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         )
         db.add(parent_profile)
         await db.flush()
+        await db.commit()
 
     if not user or not verify_password(req.password, user.password):
         raise HTTPException(401, detail={"code": "INVALID_CREDENTIALS",
@@ -157,12 +128,15 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(401, detail={"code": "ACCOUNT_DISABLED",
                                           "message": "Account is disabled"})
+
     if user.totp_enabled:
         partial_token = await store_partial_2fa_token(str(user.id), db)
         return {"requires_2fa": True, "partial_token": partial_token}
+
     tokens = await _issue_tokens(user, db)
     context = await _ensure_default_context(db, user)
-    return {**tokens, "user": context["user"], "context": context}
+    return {**tokens, "context": context}
+
 
 @router.post("/2fa/verify")
 async def verify_2fa(partial_token: str, code: str, db: AsyncSession = Depends(get_db)):
@@ -177,14 +151,16 @@ async def verify_2fa(partial_token: str, code: str, db: AsyncSession = Depends(g
                                           "message": "Invalid verification code"})
     return await _issue_tokens(user, db)
 
+
 @router.post("/2fa/setup")
 async def setup_2fa(current_user: User = Depends(require_roles("SUPER_ADMIN", "ADMIN")),
                     db: AsyncSession = Depends(get_db)):
     secret = generate_totp_secret()
-    current_user.totp_secret = secret   # store temporarily; confirm before enabling
+    current_user.totp_secret = secret
     await db.commit()
     uri = get_totp_uri(secret, current_user.email, "AMS")
     return {"qr_uri": uri, "secret": secret}
+
 
 @router.post("/2fa/confirm-setup")
 async def confirm_2fa(code: str,
@@ -196,6 +172,7 @@ async def confirm_2fa(code: str,
     await db.commit()
     return {"message": "2FA enabled"}
 
+
 @router.delete("/2fa/disable")
 async def disable_2fa(current_user: User = Depends(require_roles("SUPER_ADMIN")),
                       db: AsyncSession = Depends(get_db)):
@@ -203,6 +180,7 @@ async def disable_2fa(current_user: User = Depends(require_roles("SUPER_ADMIN"))
     current_user.totp_secret = None
     await db.commit()
     return {"message": "2FA disabled"}
+
 
 @router.post("/refresh")
 async def refresh(req: RefreshRequest, db: AsyncSession = Depends(get_db)):
@@ -222,7 +200,6 @@ async def refresh(req: RefreshRequest, db: AsyncSession = Depends(get_db)):
 @router.post("/logout")
 async def logout(refresh_token: str, db: AsyncSession = Depends(get_db)):
     await revoke_refresh_token(refresh_token, db)
-    # Access token (JWT) expires naturally in 15 minutes — no blacklist needed.
     return {"message": "Logged out"}
 
 
@@ -240,85 +217,6 @@ async def change_password(
     await revoke_all_tokens_for_user(str(current_user.id), db)
     return {"message": "Password changed"}
 
-
-@router.post("/setup-default-context")
-async def setup_default_context(
-    current_user: User = Depends(require_roles("SUPER_ADMIN", "ADMIN")),
-    db: AsyncSession = Depends(get_db),
-):
-    return await _ensure_default_context(db, current_user)
-
-
-async def _ensure_default_context(db: AsyncSession, current_user: User | None = None) -> dict:
-    from app.models.academic_year import AcademicYear
-    from app.models.branch import Branch
-    from app.models.school import School
-
-    school = (await db.execute(select(School).limit(1))).scalar_one_or_none()
-    if not school:
-        school = School(
-            name="St. Mary's Higher Secondary School",
-            city="",
-            state="",
-            board="STATE",
-        )
-        db.add(school)
-        await db.flush()
-
-    branch = (await db.execute(select(Branch).where(Branch.school_id == school.id).limit(1))).scalar_one_or_none()
-    if not branch:
-        branch = Branch(
-            school_id=school.id,
-            name="Main Branch",
-            location="Main Campus",
-        )
-        db.add(branch)
-        await db.flush()
-
-    year = (await db.execute(
-        select(AcademicYear)
-        .where(AcademicYear.school_id == school.id, AcademicYear.is_current == True)
-        .limit(1)
-    )).scalar_one_or_none()
-    if not year:
-        year = AcademicYear(
-            school_id=school.id,
-            name="2024-25",
-            start_date=date(2024, 6, 1),
-            end_date=date(2025, 5, 31),
-            is_current=True,
-        )
-        db.add(year)
-        await db.flush()
-
-    if current_user and not current_user.branch_id and current_user.role == "ADMIN":
-        current_user.branch_id = branch.id
-
-    context = {
-        "school": {
-            "id": str(school.id),
-            "name": school.name,
-        },
-        "branch": {
-            "id": str(branch.id),
-            "name": branch.name,
-            "school_id": str(branch.school_id),
-        },
-        "academic_year": {
-            "id": str(year.id),
-            "name": year.name,
-            "is_current": year.is_current,
-        },
-        "user": {
-            "id": str(current_user.id) if current_user else "",
-            "name": current_user.name if current_user else "",
-            "email": current_user.email if current_user else "",
-            "role": current_user.role if current_user else "ADMIN",
-            "branch_id": str(current_user.branch_id) if current_user and current_user.branch_id else str(branch.id),
-        },
-    }
-    await db.commit()
-    return context
 
 async def _issue_tokens(user: User, db: AsyncSession) -> dict:
     access        = create_access_token({"sub": str(user.id), "role": user.role,

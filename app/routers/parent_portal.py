@@ -279,17 +279,28 @@ async def cancel_leave(
 
 @router.get("/notifications")
 async def my_notifications(
+    student_id: UUID | None = None,
     unread_only: bool = False,
     limit: int = 50,
     user=Depends(require_parent),
     db: AsyncSession = Depends(get_db),
 ):
+    """Notification log scoped to the logged-in parent. Optionally filter to one
+    child via ?student_id= (spec §6.6). The message preview is read from the
+    JSONB payload body since the new Notification schema has no `message` column.
+    """
+    parent = await _get_parent(db, user.id)
+    owned = await _get_linked_student_ids(db, parent.id)
+
     stmt = (
         select(Notification)
-        .where(Notification.recipient_id == user.id)
+        .where(Notification.parent_id == parent.id)
         .order_by(Notification.created_at.desc())
         .limit(limit)
     )
+    if student_id:
+        await _assert_owns_student(student_id, owned)
+        stmt = stmt.where(Notification.student_id == student_id)
     if unread_only:
         stmt = stmt.where(Notification.read_at.is_(None))
 
@@ -297,10 +308,11 @@ async def my_notifications(
     return [
         {
             "id": str(r.id),
-            "message": r.message,
+            "message": (r.payload or {}).get("body", ""),
             "channel": r.channel,
             "trigger_type": r.trigger_type,
             "status": r.status,
+            "student_id": str(r.student_id) if r.student_id else None,
             "is_read": r.read_at is not None,
             "created_at": r.created_at.isoformat() if r.created_at else None,
         }
@@ -314,9 +326,10 @@ async def mark_notification_read(
     user=Depends(require_parent),
     db: AsyncSession = Depends(get_db),
 ):
+    parent = await _get_parent(db, user.id)
     await db.execute(
         update(Notification)
-        .where(Notification.id == notif_id, Notification.recipient_id == user.id)
+        .where(Notification.id == notif_id, Notification.parent_id == parent.id)
         .values(read_at=datetime.utcnow(), status="READ")
     )
     await db.commit()
@@ -328,9 +341,10 @@ async def mark_all_read(
     user=Depends(require_parent),
     db: AsyncSession = Depends(get_db),
 ):
+    parent = await _get_parent(db, user.id)
     await db.execute(
         update(Notification)
-        .where(Notification.recipient_id == user.id, Notification.read_at.is_(None))
+        .where(Notification.parent_id == parent.id, Notification.read_at.is_(None))
         .values(read_at=datetime.utcnow(), status="READ")
     )
     await db.commit()
@@ -342,9 +356,10 @@ async def unread_count(
     user=Depends(require_parent),
     db: AsyncSession = Depends(get_db),
 ):
+    parent = await _get_parent(db, user.id)
     count = (await db.execute(
         select(func.count()).where(
-            Notification.recipient_id == user.id,
+            Notification.parent_id == parent.id,
             Notification.read_at.is_(None),
         )
     )).scalar() or 0
