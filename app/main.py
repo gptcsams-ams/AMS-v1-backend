@@ -11,7 +11,8 @@ from app.middleware.if_modified_since_middleware import IfModifiedSinceMiddlewar
 from app.routers import (
     parent_portal,
     academic_years, attendance, audit, auth, branding, branches,
-    calendar, cameras, classes, classroom_attendance, detections, enrollments, leaves,
+    calendar, cameras, classes, classroom_attendance, detections, email_settings,
+    enrollments, leaves,
     mobile, notifications, parents, ptm, reports, school, sections,
     students, subjects, teachers, timetable, webhooks, websocket,
 )
@@ -76,6 +77,7 @@ app.include_router(reports.router,             prefix=f"{PREFIX}/reports",      
 app.include_router(audit.router,               prefix=f"{PREFIX}/audit",                  tags=["Audit"])
 app.include_router(mobile.router,              prefix=f"{PREFIX}/mobile",                 tags=["Mobile"])
 app.include_router(parent_portal.router,       prefix=f"{PREFIX}/parent-portal",          tags=["ParentPortal"])
+app.include_router(email_settings.router,      prefix=f"{PREFIX}/settings/email",         tags=["EmailSettings"])
 app.include_router(webhooks.router,                                                        tags=["Webhooks"])
 app.include_router(websocket.router,           prefix="/ws",                              tags=["WebSocket"])
 

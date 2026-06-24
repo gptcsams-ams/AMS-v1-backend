@@ -1,10 +1,12 @@
+import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete as sa_delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import AsyncSessionLocal, get_db
 from app.core.dependencies import require_admin, require_roles
 from app.core.security import hash_password
 from app.models.parent import Parent
@@ -14,7 +16,11 @@ from app.models.user import User
 from app.schemas.common import MessageResponse
 from app.schemas.parent import (
     ChildrenResponse,
+    CreatedParentInfo,
     ParentCreate,
+    ParentEntry,
+    ParentFamilyRegister,
+    ParentFamilyResponse,
     ParentRegister,
     ParentResponse,
     ParentStudentLinkCreate,
@@ -25,6 +31,16 @@ from app.services.parent_service import ParentService
 router = APIRouter()
 
 require_parent = require_roles("PARENT")
+
+
+def _generate_parent_password(name: str, contact_number: str) -> str:
+    """Default password: parent's first name + last 4 digits of their phone,
+    plain with no spaces or symbols (e.g. 'Rajesh' + '9876543210' -> 'Rajesh3210').
+    """
+    first = (name or "").strip().split(" ")[0] if name and name.strip() else "parent"
+    digits = "".join(ch for ch in (contact_number or "") if ch.isdigit())
+    last4 = digits[-4:]
+    return f"{first}{last4}"
 
 
 # ── Parent Portal self-reference (declared before /{parent_id} so "me" is not
@@ -158,6 +174,159 @@ async def create_parent(
     return parent
 
 
+@router.post("/family", response_model=ParentFamilyResponse)
+async def create_parent_family(
+    payload: ParentFamilyRegister,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Register a Father and/or a Mother in one go, each as its own login
+    account, both linked to the selected student(s).
+
+    Passwords are auto-generated (first name + last 4 digits of phone) and
+    returned once so the admin can pass them to the parents.
+    """
+    entries: list[tuple[str, ParentEntry]] = []
+    if payload.father:
+        entries.append(("FATHER", payload.father))
+    if payload.mother:
+        entries.append(("MOTHER", payload.mother))
+    if not entries:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide at least a Father or a Mother.",
+        )
+
+    # Emails must be unique among the submitted entries.
+    emails = [e.email for _, e in entries]
+    if len(emails) != len(set(emails)):
+        raise HTTPException(
+            status_code=409,
+            detail="Father and Mother must use different email addresses.",
+        )
+
+    # Contact numbers must be unique among the submitted entries.
+    numbers = [e.contact_number for _, e in entries]
+    if len(numbers) != len(set(numbers)):
+        raise HTTPException(
+            status_code=409,
+            detail="Father and Mother must use different contact numbers.",
+        )
+
+    # Each email must be globally unique across existing users.
+    for _, entry in entries:
+        clash = (await db.execute(
+            select(User).where(User.email == entry.email)
+        )).scalar_one_or_none()
+        if clash:
+            raise HTTPException(
+                status_code=409,
+                detail=f"The email '{entry.email}' is already registered. Use a unique email address.",
+            )
+
+    # Each contact number must be unique across existing parents (DB constraint).
+    for _, entry in entries:
+        clash = (await db.execute(
+            select(Parent).where(Parent.contact_number == entry.contact_number)
+        )).scalar_one_or_none()
+        if clash:
+            raise HTTPException(
+                status_code=409,
+                detail=f"The contact number '{entry.contact_number}' is already registered to another parent.",
+            )
+
+    # Resolve every admission number to a student; reject unknown ones.
+    students = (await db.execute(
+        select(Student).where(Student.admission_number.in_(payload.admission_numbers))
+    )).scalars().all()
+    found = {s.admission_number for s in students}
+    missing = [a for a in payload.admission_numbers if a not in found]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No student found for admission number(s): {', '.join(missing)}",
+        )
+
+    created: list[CreatedParentInfo] = []
+
+    for index, (relationship, entry) in enumerate(entries):
+        plain_password = _generate_parent_password(entry.name, entry.contact_number)
+
+        user = User(
+            name=entry.name,
+            email=entry.email,
+            password=hash_password(plain_password),
+            role="PARENT",
+            branch_id=getattr(current_user, "branch_id", None),
+        )
+        db.add(user)
+        await db.flush()  # assign user.id
+
+        parent = Parent(
+            user_id=user.id,
+            full_name=entry.name,
+            contact_number=entry.contact_number,
+            email=entry.email,
+            occupation=entry.occupation,
+            address=payload.address,
+        )
+        db.add(parent)
+        await db.flush()  # assign parent.id
+
+        # Link each student. The first parent (Father if present) is primary.
+        for student in students:
+            db.add(StudentParent(
+                student_id=student.id,
+                parent_id=parent.id,
+                relationship_type=relationship,
+                is_primary=(index == 0),
+            ))
+
+        created.append(CreatedParentInfo(
+            id=parent.id,
+            full_name=parent.full_name,
+            email=parent.email,
+            relationship_type=relationship,
+            password=plain_password,
+        ))
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A parent with this email or contact number already exists.",
+        )
+
+    # ── Fire "Your account has been created" emails — NON-BLOCKING ────────────
+    # Uses the branch's SMTP settings; silently skips if email isn't configured.
+    # The plaintext password is only available here (it is hashed in storage).
+    recipients = [
+        {
+            "parent_id": str(c.id),
+            "email": c.email,
+            "name": c.full_name,
+            "password": c.password,
+            "relationship": c.relationship_type,
+        }
+        for c in created
+    ]
+    # Key the email off the student's branch (always set), falling back to the
+    # admin's branch — email settings are configured per branch.
+    email_branch_id = students[0].branch_id if students else getattr(current_user, "branch_id", None)
+    from app.services.email_service import send_account_created_emails
+    asyncio.create_task(
+        send_account_created_emails(
+            branch_id=str(email_branch_id) if email_branch_id else "",
+            recipients=recipients,
+            db=AsyncSessionLocal(),
+        )
+    )
+
+    return ParentFamilyResponse(parents=created)
+
+
 @router.patch("/{parent_id}", response_model=ParentResponse)
 async def update_parent(parent_id: UUID, payload: ParentUpdate, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     row = (await db.execute(select(Parent).where(Parent.id == parent_id))).scalar_one_or_none()
@@ -175,7 +344,16 @@ async def delete_parent(parent_id: UUID, _: object = Depends(require_admin), db:
     row = (await db.execute(select(Parent).where(Parent.id == parent_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Parent not found")
-    await db.delete(row)
+
+    # Delete at the SQL level so we rely on DB foreign-key cascades
+    # (student_parents -> ON DELETE CASCADE) instead of ORM relationship
+    # handling, which would try to load unrelated tables.
+    user_id = row.user_id
+    if user_id:
+        # Removing the login User cascades to the Parent row and its links.
+        await db.execute(sa_delete(User).where(User.id == user_id))
+    else:
+        await db.execute(sa_delete(Parent).where(Parent.id == parent_id))
     await db.commit()
     return MessageResponse(message="Parent deleted")
 

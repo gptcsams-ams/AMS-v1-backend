@@ -44,6 +44,57 @@ class ParentRegister(BaseModel):
         return out
 
 
+class ParentEntry(BaseModel):
+    """One parent (Father or Mother) in a family-registration request.
+
+    No password field — the server generates it as the parent's first name +
+    the last 4 digits of their contact number (plain, no spaces or symbols).
+    """
+    name: str
+    email: EmailStr
+    contact_number: str
+    occupation: Optional[str] = None
+
+
+class ParentFamilyRegister(BaseModel):
+    """Create a Father and/or a Mother account in one request, each linked to
+    the same student(s). At least one of father/mother must be provided.
+    """
+    father: Optional[ParentEntry] = None
+    mother: Optional[ParentEntry] = None
+    address: Optional[str] = None
+    admission_numbers: list[str] = Field(min_length=1)
+
+    @field_validator("admission_numbers")
+    @classmethod
+    def _clean_admissions(cls, v: list[str]) -> list[str]:
+        cleaned = [a.strip() for a in v if a and a.strip()]
+        seen: set[str] = set()
+        out: list[str] = []
+        for a in cleaned:
+            if a not in seen:
+                seen.add(a)
+                out.append(a)
+        if not out:
+            raise ValueError("Select at least one student admission number.")
+        return out
+
+
+class CreatedParentInfo(BaseModel):
+    """Returned after creating a parent — includes the generated password so the
+    admin can hand the credentials to the parent (shown once, not stored plain).
+    """
+    id: UUID
+    full_name: str
+    email: str
+    relationship_type: str
+    password: str
+
+
+class ParentFamilyResponse(BaseModel):
+    parents: list[CreatedParentInfo]
+
+
 class ParentUpdate(BaseModel):
     full_name: Optional[str] = None
     contact_number: Optional[str] = None

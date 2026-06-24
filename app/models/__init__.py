@@ -11,6 +11,7 @@ from app.models.camera import Camera
 from app.models.camera_health_log import CameraHealthLog
 from app.models.classroom import Classroom
 from app.models.detection import Detection
+from app.models.email_settings import EmailSettings
 from app.models.leave_request import LeaveRequest
 from app.models.notification import Notification, NotificationTemplate, NotificationRule
 from app.models.parent import Parent
@@ -44,6 +45,7 @@ __all__ = [
     "CameraHealthLog",
     "Classroom",
     "Detection",
+    "EmailSettings",
     "LeaveRequest",
     "Notification",
     "NotificationTemplate",

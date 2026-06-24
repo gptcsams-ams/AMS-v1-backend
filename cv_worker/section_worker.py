@@ -241,6 +241,18 @@ async def run_section_window(
             logger.info("window=%s — finalized: %s", window.id, result)
         evict_section(str(window.section_id), str(academic_year_id))
 
+        # ── Fire period-attendance emails — NON-BLOCKING ─────────────────────
+        # asyncio.create_task() returns immediately; the email task runs in the
+        # background on the event loop so the next period's window opens on time.
+        # The task owns its own DB session (created here, closed inside the task).
+        from app.services.email_service import send_period_attendance_emails
+        asyncio.create_task(
+            send_period_attendance_emails(
+                window_id=str(window.id),
+                db=AsyncSessionLocal(),
+            )
+        )
+
 
 def now_utc() -> datetime:
     return datetime.utcnow()

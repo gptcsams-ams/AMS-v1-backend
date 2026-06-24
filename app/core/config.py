@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
 
+    # Fernet key for encrypting SMTP passwords (email_settings). Generate with:
+    # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    ENCRYPTION_KEY: str = ""
+
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
@@ -44,6 +48,15 @@ class Settings(BaseSettings):
     SENDGRID_FROM_EMAIL: Optional[str] = None
     SENDGRID_WEBHOOK_PUB_KEY: Optional[str] = None
     EMAIL_FROM: Optional[str] = None  # alias kept for backward compat
+
+    # Global SMTP fallback — used for parent/attendance emails when a branch has
+    # no active email_settings row. Configure once here instead of per-branch.
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None        # plaintext app password (env only)
+    SMTP_SENDER_NAME: Optional[str] = None
+    SMTP_SENDER_EMAIL: Optional[str] = None
 
     DEFAULT_ATTENDANCE_THRESHOLD: float = 75.0
     NOTIFICATION_THROTTLE_DEFAULT_MIN: int = 60
